@@ -61,13 +61,13 @@
     </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\FolderDupesDLL\FolderDupesDLL.csproj">
-      <Project>{527cdfa1-61d9-4c0e-8fe2-da6c1d81a411}</Project>
-      <Name>FolderDupesDLL</Name>
-    </ProjectReference>
+    <WCFMetadata Include="Connected Services\" />
   </ItemGroup>
   <ItemGroup>
-    <WCFMetadata Include="Connected Services\" />
+    <ProjectReference Include="..\FolderDupesDLL\FolderDupesDLL.csproj">
+      <Project>{f3dcd60a-c0ae-4872-9d5b-e24f6f12c5f1}</Project>
+      <Name>FolderDupesDLL</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
