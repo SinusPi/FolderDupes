@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -19,7 +20,7 @@ namespace FolderDupesDLL
 		public static List<FileInfo> Files = new List<FileInfo>();
 		public static List<DirectoryInfo> Folders = new List<DirectoryInfo>();
 		public static Regex[] ExcludePatterns = new Regex[0];
-		public static Dictionary<string, int> Indices = new Dictionary<string, int>();
+		public static Dictionary<string, int> BucketIndices = new Dictionary<string, int>();
 		public static List<List<FileInfo>> Buckets = new List<List<FileInfo>>();
 		public static int MaxDepth = 50;
 		public static string[] SearchFolders = new string[0];
@@ -101,7 +102,7 @@ namespace FolderDupesDLL
 		/// </summary>
 		public static List<FileInfo> GetDupes(string path)
 		{
-			if (Indices.TryGetValue(path, out int i))
+			if (BucketIndices.TryGetValue(path, out int i))
 				return Buckets[i];
 			else
 				return null;
@@ -142,57 +143,61 @@ namespace FolderDupesDLL
 			}
 		}
 
-		static Dictionary<string, int> fingerprints;
 
 		/// <summary>
-		/// Groups scanned Files into duplicate buckets using the selected comparison mode.
+		/// Groups scanned Files into duplicate Buckets using the selected comparison mode.
 		/// </summary>
 		public static void RunComparison(CompareMode mode = CompareMode.Name | CompareMode.Size, string focusFolder = null, Action<float> progressCallback = null)
 		{
-			Indices = new Dictionary<string, int>();
+
+			BucketIndices = new Dictionary<string, int>();
 			Buckets = new List<List<FileInfo>>();
-			fingerprints = new Dictionary<string, int>();
-			for (int i = 0; i < Files.Count; i++)
+
+			/// Store file numbers under "fingerprint" indexing
+			var seen_fingerprint = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+			for (int file_id = 0; file_id < Files.Count; file_id++)
 			{
-				var f = Files[i];
+				var f = Files[file_id];
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
-				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + CalculateMD5(f.FullName);
+				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + f.FullName;
 				if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName);
-				if (fingerprints.TryGetValue(fprint, out var fpbindex))
+
+				var seen = seen_fingerprint.TryGetValue(fprint, out var orig_id);
+				if (!seen)
 				{
-					var f1 = Files[fpbindex]; // previous file of same fingerprint
-					if (Indices.TryGetValue(f1.FullName, out int bui))
-					{
-						// there's a bucket already
-						Buckets[bui].Add(f);
-						Indices[f.FullName] = bui;
-					}
-					else
-					{
-						Buckets.Add(new List<FileInfo>(new FileInfo[] { f1, f }));
-						Indices[f1.FullName] = Buckets.Count - 1;
-						Indices[f.FullName] = Buckets.Count - 1;
-					}
+					// first time seeing this fingerprint, so just note it, don't start a bucket yet
+					seen_fingerprint[fprint] = file_id;
 				}
 				else
 				{
-					fingerprints[fprint] = i; // just note it's there
+					var orig_f = Files[orig_id]; // previous file of same fingerprint; "original"
+					var has_bucket = BucketIndices.TryGetValue(orig_f.FullName, out int bucket_index);
+					if (!has_bucket)
+					{
+						// retroactively create a bucket for the original file, since it now has a dupe
+						Buckets.Add(new List<FileInfo>(new FileInfo[] { orig_f }));
+						bucket_index = Buckets.Count - 1; // index of the new bucket
+						BucketIndices[orig_f.FullName] = bucket_index;
+					}
+
+					Buckets[bucket_index].Add(f);
+					BucketIndices[f.FullName] = bucket_index;
 				}
 
-				if (progressCallback != null) progressCallback(i / Files.Count);
+				if (progressCallback != null) progressCallback((float)file_id / Files.Count);
 
 				//if (i % 100 == 0) Console.Write((int)(((float)i / Files.Count) * 100) + "\u001b[9D");
 			}
 		}
 
-		/// <summary>
-		/// Runs the older O(n²) duplicate comparison algorithm.
-		/// </summary>
+		[Obsolete("This method is deprecated. Use RunComparison instead.")]
+		[Description("Runs the older O(n²) duplicate comparison algorithm.")]
 		public static void RunComparison_Old(CompareMode mode = CompareMode.Name | CompareMode.Size)
 		{
-			Indices = new Dictionary<string, int>();
+			BucketIndices = new Dictionary<string, int>();
 			Buckets = new List<List<FileInfo>>();
 			for (int i = 0; i < Files.Count; i++)
 			{
@@ -206,16 +211,16 @@ namespace FolderDupesDLL
 
 					// so f1 and f2 ARE duplicates!
 
-					if (Indices.TryGetValue(f1.FullName, out int i1))
+					if (BucketIndices.TryGetValue(f1.FullName, out int i1))
 					{
 						Buckets[i1].Add(f2);
-						Indices[f1.FullName] = i1;
+						BucketIndices[f1.FullName] = i1;
 					}
 					else
 					{
 						Buckets.Add(new List<FileInfo>(new FileInfo[] { f1, f2 }));
-						Indices[f1.FullName] = Buckets.Count - 1;
-						Indices[f2.FullName] = Buckets.Count - 1;
+						BucketIndices[f1.FullName] = Buckets.Count - 1;
+						BucketIndices[f2.FullName] = Buckets.Count - 1;
 					}
 					;
 					break;
@@ -349,7 +354,7 @@ namespace FolderDupesDLL
 			var dupes = new List<int>();
 			foreach (var f in files)
 			{
-				if (Indices.TryGetValue(f.FullName, out int fi))
+				if (BucketIndices.TryGetValue(f.FullName, out int fi))
 					dupes.Add(fi);
 				else
 					uniqity.unique++;
