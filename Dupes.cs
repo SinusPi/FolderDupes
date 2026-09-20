@@ -69,13 +69,17 @@ namespace FolderDupesDLL
         }
 
 		static int depth = 0;
-		public static void Read(Action<string> callback=null)
+		private static int readcounter = 0;
+
+		public static void Read(Action<string,string> callback=null)
         {
 			foreach (string f in SearchFolders)
 			{
-				if (callback!=null) callback(f);
+				if (callback!=null) callback("start",f);
 				depth = 0;
-				ReadFiles(f);
+				readcounter = 0;
+				ReadFiles(f,callback);
+				if (callback!=null) callback("end",readcounter.ToString());
 			}
 		}
 
@@ -84,7 +88,7 @@ namespace FolderDupesDLL
 			NotPatterns = folders.Select(s => new Regex(s,RegexOptions.IgnoreCase)).ToArray();
         }
 
-		static void ReadFiles(string path)
+		static void ReadFiles(string path, Action<string, string> callback = null)
 		{
 			depth++;
 			if (depth > MaxDepth) return;
@@ -96,24 +100,30 @@ namespace FolderDupesDLL
 
 			try
 			{
+				callback("dirprogress", path);
 				DirectoryInfo di = new DirectoryInfo(path);
+				var fullpath = di.FullName;
 
+				if (Folders.Find(f => String.Compare(f.FullName, fullpath, true) == 0) != null) return;
+					
 				Folders.Add(di);
 
 				FileInfo[] files = di.GetFiles();
 				var goodfiles = files.Where(f => !MatchesNotPattern(f.FullName));
+				readcounter += goodfiles.Count();
 
 				DirectoryInfo[] directories = di.GetDirectories();
 				var gooddirs = directories.Where(d => d.Name != "." && d.Name != ".." && !MatchesNotPattern(d.FullName));
 
 				Files.AddRange(goodfiles);
+				callback("progress", readcounter.ToString());
 
-				fileInfoCache[path] = new FilesAndDirs();
-				fileInfoCache[path].files = goodfiles.ToArray();
-				fileInfoCache[path].dirs = gooddirs.ToArray();
+				fileInfoCache[fullpath] = new FilesAndDirs();
+				fileInfoCache[fullpath].files = goodfiles.ToArray();
+				fileInfoCache[fullpath].dirs = gooddirs.ToArray();
 
 				foreach (var d in gooddirs)
-					ReadFiles(d.FullName);
+					ReadFiles(d.FullName,callback);
 			} catch (Exception _e)
 			{
 				Console.WriteLine(_e.ToString());
@@ -170,6 +180,23 @@ namespace FolderDupesDLL
 			}
 		}
 
+		static string CalculateCrappyMD5(string filename)
+		{
+			using (var md5 = MD5.Create())
+			{
+				using (var stream = File.OpenRead(filename))
+				{
+					var buf = new byte[256];
+					stream.Read(buf, 0, 128);
+					if (stream.Length>128) stream.Seek(-128, SeekOrigin.End);
+					else stream.Seek(0,SeekOrigin.Begin);
+					stream.Read(buf, 128, 128);
+					var hash = md5.ComputeHash(buf);
+					return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+				}
+			}
+		}
+
 		static Dictionary<string, int> fingerprints;
 
 		public static void RunComparison(CompareMode mode = CompareMode.Name | CompareMode.Size, string focusFolder=null, Action<float> progressCallback=null)
@@ -183,7 +210,9 @@ namespace FolderDupesDLL
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
+				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
 				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + CalculateMD5(f.FullName);
+				if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName);
 				if (fingerprints.TryGetValue(fprint, out var fpbindex))
 				{
 					var f1 = Files[fpbindex]; // previous file of same fingerprint
@@ -245,10 +274,11 @@ namespace FolderDupesDLL
 		[Flags]
 		public enum CompareMode
 		{
-			Name = 0b0001,
-			Date = 0b0010,
-			Size = 0b0100,
-			Hash = 0b1000
+			Name = 0b000001,
+			Date = 0b000010,
+			Size = 0b000100,
+			Hash = 0b001000,
+			Hush = 0b010000
 		}
 		/*
 
@@ -326,12 +356,20 @@ namespace FolderDupesDLL
 			FolderUniquities = new Dictionary<string, folderUniquity>();
 			relativeFilesHashes = new Dictionary<string, string>();
 
+			/*
 			foreach (var s in SearchFolders)
             {
 				var di = new DirectoryInfo(s);
 				FolderUniquities[di.FullName] = GetFolderUniquity(di);
             }
-        }
+			// What? This calc uniquities only for directly specified folders, makes no sense
+			*/
+			foreach (var di in Folders)
+			{
+				FolderUniquities[di.FullName] = GetFolderUniquity(di);
+			}
+
+		}
 		public static folderUniquity GetFolderUniquity(DirectoryInfo di)
 		{
 			if (FolderUniquities!=null && FolderUniquities.TryGetValue(di.FullName, out var fu)) //maybe cached already
@@ -360,7 +398,7 @@ namespace FolderDupesDLL
 			}
 
 			uniqity.allFilesRelative = new SortedSet<string>();
-			foreach (var f in files) uniqity.allFilesRelative.Add(f.Name);
+			foreach (var f in files) uniqity.allFilesRelative.Add(f.Name+"::"+f.Length);
 
 			// add subfolders
 			DirectoryInfo[] dirs = filesdirs.dirs;
@@ -383,11 +421,21 @@ namespace FolderDupesDLL
 			{
 				var bu = Buckets[d];
 				var bui = 0;
+				/*
 				while (bui<bu.Count && bu[bui].DirectoryName.StartsWith(di.FullName)) bui++;
 				if (bui >= bu.Count) continue;
 				var dirname = bu[bui].DirectoryName;
 				if (!dupeDirs.ContainsKey(dirname)) dupeDirs[dirname] = 0;
 				dupeDirs[dirname]++;
+				*/
+				// count ALL dupes, not just the first one
+				foreach (var dupdir in bu)
+				{
+					var dirname = dupdir.DirectoryName;
+					if (dirname==di.FullName) continue;
+					if (!dupeDirs.ContainsKey(dirname)) dupeDirs[dirname] = 0;
+					dupeDirs[dirname]++;
+				}
 			}
 
 			uniqity.dupes = dupes.ToArray();
