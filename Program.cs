@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -18,14 +19,39 @@ namespace FolderDupesCLI
 
 	class Program
 	{
+		private const int STD_OUTPUT_HANDLE = -11;
+		private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+		[DllImport("kernel32.dll", SetLastError = true)]
+		private static extern IntPtr GetStdHandle(int nStdHandle);
+
+		[DllImport("kernel32.dll")]
+		private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+		[DllImport("kernel32.dll")]
+		private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
 		//static string[] SearchFolders = { @"C:\FOTO\" };
 		//static Regex[] NotPatterns = { new Regex(@"^C:\\FOTO\\LRplugins"), new Regex(@".*lrdata$"), new Regex(@".*lrdata$") };
 		static int MinDupes = 5;
+
+		private static void EnableVirtualTerminalProcessing()
+		{
+			var iStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+			if (iStdOut == IntPtr.Zero || iStdOut == new IntPtr(-1)) return;
+
+			uint outConsoleMode;
+			if (!GetConsoleMode(iStdOut, out outConsoleMode)) return;
+			outConsoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+			SetConsoleMode(iStdOut, outConsoleMode);
+		}
 
 		static void Main(string[] args)
 		{
 			try
 			{
+				EnableVirtualTerminalProcessing();
+
 				//Dupes.Init(new string[] { @"C:\Dokumenty\" },new string[] { @"^C:\\FOTO\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv" });
 				//Dupes.Init(new string[] { @"S:\FOTO\", @"S:\Belly Dance" },new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db" });
 				//Dupes.Init(new string[] { @"S:\-SINUS-", @"S:\-AILI-", @"S:\wrzut\", @"S:\Nautilus", @"S:\STRYCH", @"S:\Archiwa WWW" },new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn" });
@@ -110,7 +136,7 @@ namespace FolderDupesCLI
 				Dupes.Init(includeFolders.ToArray(), excludeFolders.ToArray());
 				
 				int prevprogress = 0;
-				Dupes.Read((string t,string f)=>
+				Dupes.Enumerate((string t,string f)=>
 				{
 					switch (t)
 					{
