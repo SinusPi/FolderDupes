@@ -67,5 +67,11 @@
   <ItemGroup>
     <WCFMetadata Include="Connected Services\" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FolderDupesDLL\FolderDupesDLL.csproj">
+      <Project>{F3DCD60A-C0AE-4872-9D5B-E24F6F12C5F1}</Project>
+      <Name>FolderDupesDLL</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
