@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -10,141 +9,73 @@ using System.Threading.Tasks;
 
 namespace FolderDupesDLL
 {
+	/// <summary>
+	/// Exposes folder-scanning and duplicate-detection functionality for the DLL.
+	/// The API lets callers initialize search roots, scan files, compare file groups,
+	/// and calculate folder uniquity summaries from the collected file set.
+	/// </summary>
 	public static class Dupes
 	{
-		private const int STD_OUTPUT_HANDLE = -11;
-		private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
-		private const uint DISABLE_NEWLINE_AUTO_RETURN = 0x0008;
-		[DllImport("kernel32.dll")]
-		private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
-
-		[DllImport("kernel32.dll", SetLastError = true)]
-		private static extern IntPtr GetStdHandle(int nStdHandle);
-		[DllImport("kernel32.dll")]
-		private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
-
-
 		public static List<FileInfo> Files = new List<FileInfo>();
 		public static List<DirectoryInfo> Folders = new List<DirectoryInfo>();
-		public static Regex[] NotPatterns = new Regex[0];
+		public static Regex[] ExcludePatterns = new Regex[0];
 		public static Dictionary<string, int> Indices = new Dictionary<string, int>();
 		public static List<List<FileInfo>> Buckets = new List<List<FileInfo>>();
 		public static int MaxDepth = 50;
 		public static string[] SearchFolders = new string[0];
 
-		static Dictionary<string, FilesAndDirs> fileInfoCache;
-
-		class FilesAndDirs
-		{
-			public FileInfo[] files;
-			public DirectoryInfo[] dirs;
-		}
+		/// <summary>
+		/// Resets all cached scan state and prepares the DLL for a new comparison run.
+		/// </summary>
 		public static void Init()
 		{
-			fileInfoCache = new Dictionary<string, FilesAndDirs>();
+			EnumerationUtility.Reset();
 
 			Files = new List<FileInfo>();
 			Folders = new List<DirectoryInfo>();
 			SkipUniquities = new SortedSet<string>();
-
-			var iStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-			GetConsoleMode(iStdOut, out uint outConsoleMode);
-			outConsoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-			SetConsoleMode(iStdOut, outConsoleMode);
 		}
 
-		public static void Init(string[] folders, string[] notpatterns = null, int maxdepth = 20)
+		/// <summary>
+		/// Resets state and configures the search folders, exclude patterns, and max recursion depth.
+		/// </summary>
+		public static void Init(string[] includeFolders, string[] excludePatterns = null, int maxdepth = 20)
 		{
 			Init();
 
-			SetSearchFolders(folders, maxdepth);
-			if (notpatterns != null) SetNotFolders(notpatterns);
-			MaxDepth = maxdepth;
+			SetSearchFolders(includeFolders, maxdepth);
+			if (excludePatterns != null) SetExcludePatterns(excludePatterns);
 		}
 
+		/// <summary>
+		/// Stores the folder roots that will be scanned.
+		/// </summary>
 		public static void SetSearchFolders(string[] folders, int maxdepth = 50)
 		{
 			SearchFolders = folders;
 			MaxDepth = maxdepth;
 		}
 
-		static int depth = 0;
-		private static int readcounter = 0;
-
-		public static void Read(Action<string, string> callback = null)
+		/// <summary>
+		/// Converts exclude patterns into case-insensitive regular expressions.
+		/// </summary>
+		public static void SetExcludePatterns(string[] patterns)
 		{
-			foreach (string f in SearchFolders)
-			{
-				if (callback != null) callback("start", f);
-				depth = 0;
-				readcounter = 0;
-				ReadFiles(f, callback);
-				if (callback != null) callback("end", readcounter.ToString());
-			}
+			ExcludePatterns = patterns.Select(s => new Regex(s, RegexOptions.IgnoreCase)).ToArray();
 		}
 
-		public static void SetNotFolders(string[] folders)
+
+		/// <summary>
+		/// Recursively scans each configured search folder and collects files and directories in the Files and Folders lists.
+		/// </summary>
+		public static void Enumerate(Action<string, string> callback = null)
 		{
-			NotPatterns = folders.Select(s => new Regex(s, RegexOptions.IgnoreCase)).ToArray();
+			EnumerationUtility.Enumerate(SearchFolders, MaxDepth, ExcludePatterns, Files, Folders, callback);
 		}
 
-		static void ReadFiles(string path, Action<string, string> callback = null)
-		{
-			depth++;
-			if (depth > MaxDepth) return;
-			if (MatchesNotPattern(path))
-			{
-				//Console.WriteLine("Excluded " + path);
-				return;
-			}
-
-			try
-			{
-				callback("dirprogress", path);
-				DirectoryInfo di = new DirectoryInfo(path);
-				var fullpath = di.FullName;
-
-				if (Folders.Find(f => String.Compare(f.FullName, fullpath, true) == 0) != null) return;
-
-				Folders.Add(di);
-
-				FileInfo[] files = di.GetFiles();
-				var goodfiles = files.Where(f => !MatchesNotPattern(f.FullName));
-				readcounter += goodfiles.Count();
-
-				DirectoryInfo[] directories = di.GetDirectories();
-				var gooddirs = directories.Where(d => d.Name != "." && d.Name != ".." && !MatchesNotPattern(d.FullName));
-
-				Files.AddRange(goodfiles);
-				callback("progress", readcounter.ToString());
-
-				fileInfoCache[fullpath] = new FilesAndDirs();
-				fileInfoCache[fullpath].files = goodfiles.ToArray();
-				fileInfoCache[fullpath].dirs = gooddirs.ToArray();
-
-				foreach (var d in gooddirs)
-					ReadFiles(d.FullName, callback);
-			}
-			catch (Exception _e)
-			{
-				Console.WriteLine(_e.ToString());
-			}
-
-			depth--;
-		}
-
-		static bool MatchesNotPattern(string s)
-		{
-			try
-			{
-				return NotPatterns.First(r => r.IsMatch(s)) != null;
-			}
-			catch (Exception e)
-			{
-				return false;
-			}
-		}
-
+		/// <summary>
+		/// Placeholder for metadata loading; currently does nothing.
+		/// </summary>
 		public static void ReadMeta()
 		{
 			return;
@@ -157,11 +88,17 @@ namespace FolderDupesDLL
 			*/
 		}
 
+		/// <summary>
+		/// Returns the duplicate bucket for the given file.
+		/// </summary>
 		public static List<FileInfo> GetDupes(FileInfo fi)
 		{
 			return GetDupes(fi.FullName);
 		}
 
+		/// <summary>
+		/// Returns the duplicate bucket for the file path, if one exists.
+		/// </summary>
 		public static List<FileInfo> GetDupes(string path)
 		{
 			if (Indices.TryGetValue(path, out int i))
@@ -170,6 +107,9 @@ namespace FolderDupesDLL
 				return null;
 		}
 
+		/// <summary>
+		/// Computes a full MD5 hash for the file contents.
+		/// </summary>
 		static string CalculateMD5(string filename)
 		{
 			using (var md5 = MD5.Create())
@@ -182,6 +122,9 @@ namespace FolderDupesDLL
 			}
 		}
 
+		/// <summary>
+		/// Computes a lightweight MD5 hash from the beginning and end of a file.
+		/// </summary>
 		static string CalculateCrappyMD5(string filename)
 		{
 			using (var md5 = MD5.Create())
@@ -201,6 +144,9 @@ namespace FolderDupesDLL
 
 		static Dictionary<string, int> fingerprints;
 
+		/// <summary>
+		/// Groups scanned Files into duplicate buckets using the selected comparison mode.
+		/// </summary>
 		public static void RunComparison(CompareMode mode = CompareMode.Name | CompareMode.Size, string focusFolder = null, Action<float> progressCallback = null)
 		{
 			Indices = new Dictionary<string, int>();
@@ -211,7 +157,6 @@ namespace FolderDupesDLL
 				var f = Files[i];
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
-				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
 				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + CalculateMD5(f.FullName);
 				if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName);
@@ -242,6 +187,9 @@ namespace FolderDupesDLL
 			}
 		}
 
+		/// <summary>
+		/// Runs the older O(n²) duplicate comparison algorithm.
+		/// </summary>
 		public static void RunComparison_Old(CompareMode mode = CompareMode.Name | CompareMode.Size)
 		{
 			Indices = new Dictionary<string, int>();
@@ -375,6 +323,9 @@ namespace FolderDupesDLL
 			}
 
 		}
+		/// <summary>
+		/// Calculates the uniquity details for a single directory.
+		/// </summary>
 		public static folderUniquity GetFolderUniquity(DirectoryInfo di)
 		{
 			if (FolderUniquities != null && FolderUniquities.TryGetValue(di.FullName, out var fu)) //maybe cached already
@@ -382,9 +333,11 @@ namespace FolderDupesDLL
 
 			var uniqity = new folderUniquity();
 			FileInfo[] files;
-			FilesAndDirs filesdirs;
-			if (fileInfoCache.TryGetValue(di.FullName, out filesdirs))
-				files = filesdirs.files;
+			DirectoryInfo[] dirs;
+			if (EnumerationUtility.TryGetCachedContents(di.FullName, out files, out dirs))
+			{
+				// cache hit; files and dirs are already populated above
+			}
 			else
 				throw new Exception("Why isn't " + di.FullName + " in fileInfoCache?");
 			//else
@@ -406,8 +359,7 @@ namespace FolderDupesDLL
 			foreach (var f in files) uniqity.allFilesRelative.Add(f.Name + "::" + f.Length);
 
 			// add subfolders
-			DirectoryInfo[] dirs = filesdirs.dirs;
-			//dirs = di.GetDirectories().Where(d => !MatchesNotPattern(d.FullName)).ToArray();
+			//dirs = di.GetDirectories().Where(d => !DoesMatchExcludePatterns(d.FullName)).ToArray();
 			foreach (var dir in dirs)
 			{
 				var du = GetFolderUniquity(dir);
@@ -467,6 +419,9 @@ namespace FolderDupesDLL
 		static Dictionary<string, bool> loopcache;
 		private static CompareMode Mode;
 
+		/// <summary>
+		/// Returns all files contained in a directory tree.
+		/// </summary>
 		static FileInfo[] GetAllFiles(DirectoryInfo di, bool clearLoopCache = true)
 		{
 			if (clearLoopCache) loopcache = new Dictionary<string, bool>();
@@ -482,6 +437,9 @@ namespace FolderDupesDLL
 			return files.ToArray();
 		}
 
+		/// <summary>
+		/// Computes an MD5 hash for the supplied string.
+		/// </summary>
 		static string GetHash(string s)
 		{
 			// Convert the input string to a byte array and compute the hash.
