@@ -162,8 +162,8 @@ namespace FolderDupesDLL
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
-				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + f.FullName;
-				if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName);
+				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + CalculateMD5(f.FullName); // computes full MD5 hash of file contents; this is slow for large files, so use sparingly
+				else if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName); // computes a "crappy" MD5 hash from the first and last 128 bytes of the file; this is faster but less reliable
 
 				var seen = seen_fingerprint.TryGetValue(fprint, out var orig_id);
 				if (!seen)
@@ -354,8 +354,9 @@ namespace FolderDupesDLL
 			var dupes = new List<int>();
 			foreach (var f in files)
 			{
-				if (BucketIndices.TryGetValue(f.FullName, out int fi))
-					dupes.Add(fi);
+				var is_dupe = BucketIndices.TryGetValue(f.FullName, out int bucket_id);
+				if (is_dupe)
+					dupes.Add(bucket_id);
 				else
 					uniqity.unique++;
 			}
@@ -367,11 +368,11 @@ namespace FolderDupesDLL
 			//dirs = di.GetDirectories().Where(d => !DoesMatchExcludePatterns(d.FullName)).ToArray();
 			foreach (var dir in dirs)
 			{
-				var du = GetFolderUniquity(dir);
-				uniqity.unique += du.unique;
-				if (du.dupes != null) dupes.AddRange(du.dupes);
+				var subdir_uniquity = GetFolderUniquity(dir);
+				uniqity.unique += subdir_uniquity.unique;
+				if (subdir_uniquity.dupes != null) dupes.AddRange(subdir_uniquity.dupes);
 
-				var relativeToHere = du.allFilesRelative.Select(r => dir.Name + "\\" + r);
+				var relativeToHere = subdir_uniquity.allFilesRelative.Select(r => dir.Name + "\\" + r);
 				foreach (var f in relativeToHere) uniqity.allFilesRelative.Add(f);
 			}
 			uniqity.filesHash = GetHash(String.Join("\n", uniqity.allFilesRelative.ToArray()));
@@ -381,8 +382,8 @@ namespace FolderDupesDLL
 			Dictionary<string, int> dupeDirs = new Dictionary<string, int>();
 			foreach (var d in dupes)
 			{
-				var bu = Buckets[d];
-				var bui = 0;
+				var bucket = Buckets[d];
+
 				/*
 				while (bui<bu.Count && bu[bui].DirectoryName.StartsWith(di.FullName)) bui++;
 				if (bui >= bu.Count) continue;
@@ -391,7 +392,7 @@ namespace FolderDupesDLL
 				dupeDirs[dirname]++;
 				*/
 				// count ALL dupes, not just the first one
-				foreach (var dupdir in bu)
+				foreach (var dupdir in bucket)
 				{
 					var dirname = dupdir.DirectoryName;
 					if (dirname == di.FullName) continue;
