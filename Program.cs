@@ -35,6 +35,8 @@ namespace FolderDupesCLI
 		//static string[] SearchFolders = { @"C:\FOTO\" };
 		//static Regex[] NotPatterns = { new Regex(@"^C:\\FOTO\\LRplugins"), new Regex(@".*lrdata$"), new Regex(@".*lrdata$") };
 		static int MinDupes = 5;
+		private const int WrappedIndent = 10;
+		private static readonly Regex AnsiEscapeRegex = new Regex(@"\x1B\[[0-9;]*m", RegexOptions.Compiled);
 
 		private static void EnableVirtualTerminalProcessing()
 		{
@@ -45,6 +47,73 @@ namespace FolderDupesCLI
 			if (!GetConsoleMode(iStdOut, out outConsoleMode)) return;
 			outConsoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 			SetConsoleMode(iStdOut, outConsoleMode);
+		}
+
+		private static int GetConsoleWidth()
+		{
+			try
+			{
+				return Math.Max(WrappedIndent + 1, Console.WindowWidth);
+			}
+			catch
+			{
+				return 80;
+			}
+		}
+
+		private static int VisibleLength(string text)
+		{
+			return string.IsNullOrEmpty(text) ? 0 : AnsiEscapeRegex.Replace(text, string.Empty).Length;
+		}
+
+		private static void WriteWrappedLine(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+			{
+				Console.WriteLine();
+				return;
+			}
+
+			var width = GetConsoleWidth();
+			if (VisibleLength(text) <= width)
+			{
+				Console.WriteLine(text);
+				return;
+			}
+
+			var indent = new string(' ', WrappedIndent);
+			var line = new StringBuilder();
+			int visible = 0;
+
+			for (int i = 0; i < text.Length;)
+			{
+				if (text[i] == '\x1b' && i + 1 < text.Length && text[i + 1] == '[')
+				{
+					int start = i;
+					i += 2;
+					while (i < text.Length && text[i] != 'm') i++;
+					if (i < text.Length) i++;
+					line.Append(text, start, i - start);
+					continue;
+				}
+
+				if (visible >= width)
+				{
+					Console.WriteLine(line.ToString());
+					line.Clear();
+					line.Append(indent);
+					visible = WrappedIndent;
+				}
+
+				line.Append(text[i]);
+				visible++;
+				i++;
+			}
+
+			if (line.Length > 0)
+			{
+				Console.WriteLine(line.ToString());
+			}
 		}
 
 		static List<String> includeFolders = new List<string>();
@@ -96,9 +165,19 @@ namespace FolderDupesCLI
 
 				//ReadMeta();
 
-				Console.WriteLine("Comparing...");
-				var tnow = DateTime.Now;
-				Dupes.RunComparison(compareMode, focusFolder, f => { var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 1) Console.WriteLine("{0}", (int)(f * 100)); tnow = now; });
+				var tnow = DateTime.MinValue;
+				Action<float> percentProgressCallback = (f => {
+					var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 1)
+					{
+						// write int percent padded, move cursor back
+						Console.Write("\x8\x8\x8\x8\x8\x8" + String.Format("{0,2}%", (int)(f * 100)) + "...");
+						tnow = now;
+					}
+				});
+
+				Console.Write("Comparing       ");
+				Dupes.RunComparison(compareMode, focusFolder, percentProgressCallback);
+				Console.WriteLine("\x8\x8\x8\x8\x8\x0008done.   ");
 
 				if (focusFolder != null)
 				{
@@ -113,8 +192,9 @@ namespace FolderDupesCLI
 				else
 				{
 					// show all folders' uniquities, ordered.
-					Console.WriteLine("Finding uniquity...");
-					Dupes.CalculateFolderUniquity();
+					Console.Write("Finding uniquity       ");
+					Dupes.CalculateFolderUniquity(percentProgressCallback);
+					Console.WriteLine("\x8\x8\x8\x8\x8\x0008done.   ");
 
 					string[] folders = Dupes.FolderUniquities.Keys.ToArray();
 					folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
@@ -224,16 +304,15 @@ namespace FolderDupesCLI
 			{
 				var dupes = results[name];
 				if (OnlyDupes && (dupes == null || dupes.Count() == 0)) continue;
-				Console.Write(name + " - ");
 				if (dupes == null || dupes.Count() == 0)
 				{
 					count_unique++;
-					Console.WriteLine("\x1b[32;1munique\x1b[0m");
+					WriteWrappedLine(name + " - \x1b[32;1munique\x1b[0m");
 				}
 				else
 				{
 					count_dupes++;
-					Console.WriteLine("\x1b[31;1m" + dupes.Count() + "\x1b[0m: " + String.Join(", ", dupes));
+					WriteWrappedLine(name + " - \x1b[31;1m" + dupes.Count() + "\x1b[0m: " + String.Join(", ", dupes));
 				}
 			}
 
