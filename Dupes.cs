@@ -143,22 +143,16 @@ namespace FolderDupesDLL
 			}
 		}
 
-
-		/// <summary>
-		/// Groups scanned Files into duplicate Buckets using the selected comparison mode.
-		/// </summary>
-		public static void RunComparison(CompareMode mode = CompareMode.Name | CompareMode.Size, string focusFolder = null, Action<float> progressCallback = null)
+		static void CompareIntoBuckets(List<FileInfo> files, CompareMode mode, Dictionary<string, int> bucketIndices, List<List<FileInfo>> buckets, Action<float> progressCallback = null)
 		{
-
-			BucketIndices = new Dictionary<string, int>();
-			Buckets = new List<List<FileInfo>>();
+			progressCallback?.Invoke(0f);
 
 			/// Store file numbers under "fingerprint" indexing
 			var seen_fingerprint = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-			for (int file_id = 0; file_id < Files.Count; file_id++)
+			for (int file_id = 0; file_id < files.Count; file_id++)
 			{
-				var f = Files[file_id];
+				var f = files[file_id];
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
@@ -173,23 +167,55 @@ namespace FolderDupesDLL
 				}
 				else
 				{
-					var orig_f = Files[orig_id]; // previous file of same fingerprint; "original"
-					var has_bucket = BucketIndices.TryGetValue(orig_f.FullName, out int bucket_index);
+					var orig_f = files[orig_id]; // previous file of same fingerprint; "original"
+					var has_bucket = bucketIndices.TryGetValue(orig_f.FullName, out int bucket_index);
 					if (!has_bucket)
 					{
 						// retroactively create a bucket for the original file, since it now has a dupe
-						Buckets.Add(new List<FileInfo>(new FileInfo[] { orig_f }));
-						bucket_index = Buckets.Count - 1; // index of the new bucket
-						BucketIndices[orig_f.FullName] = bucket_index;
+						buckets.Add(new List<FileInfo>(new FileInfo[] { orig_f }));
+						bucket_index = buckets.Count - 1; // index of the new bucket
+						bucketIndices[orig_f.FullName] = bucket_index;
 					}
 
-					Buckets[bucket_index].Add(f);
-					BucketIndices[f.FullName] = bucket_index;
+					buckets[bucket_index].Add(f);
+					bucketIndices[f.FullName] = bucket_index;
 				}
 
-				if (progressCallback != null) progressCallback((float)file_id / Files.Count);
+				progressCallback?.Invoke((float)file_id / files.Count);
 
 				//if (i % 100 == 0) Console.Write((int)(((float)i / Files.Count) * 100) + "\u001b[9D");
+			}
+
+		}
+
+		/// <summary>
+		/// Groups scanned Files into duplicate Buckets using the selected comparison mode.
+		/// </summary>
+		public static void RunComparison(CompareMode mode = CompareMode.Name | CompareMode.Size, string focusFolder = null, Action<float> progressCallback = null)
+		{
+			BucketIndices = new Dictionary<string, int>();
+			Buckets = new List<List<FileInfo>>();
+
+			var was_hash = mode.HasFlag(CompareMode.Hash);
+			if (focusFolder != null && was_hash) mode &= ~CompareMode.Hash;
+			
+			CompareIntoBuckets(Files, mode, BucketIndices, Buckets, progressCallback);
+
+			if (was_hash)
+			{
+				mode |= CompareMode.Hash;
+				// now re-run the comparison for the buckets that have more than one file, but only for files in the focusFolder
+				var focusDir = new DirectoryInfo(focusFolder);
+				var focusFiles = Files.Where(f => f.Directory.FullName.StartsWith(focusDir.FullName)).ToList();
+				// add all files in the same bucket as any of the focusFiles, so we can compare them all together
+				var dupes = focusFiles.SelectMany(f => GetDupes(f) ?? new List<FileInfo>()).Distinct();
+				focusFiles = focusFiles.Union(dupes).ToList();
+				BucketIndices = new Dictionary<string, int>();
+				Buckets = new List<List<FileInfo>>();
+				if (focusFiles.Count > 0)
+				{
+					CompareIntoBuckets(focusFiles, mode, BucketIndices, Buckets, progressCallback);
+				}
 			}
 		}
 
@@ -309,7 +335,7 @@ namespace FolderDupesDLL
 		public static Dictionary<string, folderUniquity> FolderUniquities = null;
 		public static Dictionary<string, string> relativeFilesHashes;
 
-		public static void CalculateFolderUniquity()
+		public static void CalculateFolderUniquity(Action<float> callback = null)
 		{
 			FolderUniquities = new Dictionary<string, folderUniquity>();
 			relativeFilesHashes = new Dictionary<string, string>();
@@ -325,6 +351,7 @@ namespace FolderDupesDLL
 			foreach (var di in Folders)
 			{
 				FolderUniquities[di.FullName] = GetFolderUniquity(di);
+				callback?.Invoke((float)FolderUniquities.Count / Folders.Count);
 			}
 
 		}
