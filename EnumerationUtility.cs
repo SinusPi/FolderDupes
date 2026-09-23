@@ -24,12 +24,12 @@ namespace FolderDupesDLL
 		public static void Enumerate(string[] searchFolders, int maxDepth, Regex[] excludePatterns, List<FileInfo> files, List<DirectoryInfo> folders, Action<string, string> callback = null)
 		{
 			int readcounter = 0;
+			if (callback != null) callback("start", readcounter.ToString());
 			foreach (string f in searchFolders)
 			{
-				if (callback != null) callback("start", f);
 				EnumerateFolder(f, maxDepth, excludePatterns, files, folders, callback, ref readcounter, 0);
-				if (callback != null) callback("end", readcounter.ToString());
 			}
+			if (callback != null) callback("end", readcounter.ToString());
 		}
 
 		public static bool TryGetCachedContents(string fullPath, out FileInfo[] files, out DirectoryInfo[] dirs)
