@@ -22,6 +22,7 @@ namespace FolderDupesDLL
 		public static Regex[] ExcludePatterns = new Regex[0];
 		public static Dictionary<string, int> BucketIndices = new Dictionary<string, int>();
 		public static List<List<FileInfo>> Buckets = new List<List<FileInfo>>();
+		public static List<FileInfo> DifferentByHash = new List<FileInfo>();
 		public static int MaxDepth = 50;
 		public static string[] SearchFolders = new string[0];
 
@@ -209,13 +210,17 @@ namespace FolderDupesDLL
 				var focusFiles = Files.Where(f => f.Directory.FullName.StartsWith(focusDir.FullName)).ToList();
 				// add all files in the same bucket as any of the focusFiles, so we can compare them all together
 				var dupes = focusFiles.SelectMany(f => GetDupes(f) ?? new List<FileInfo>()).Distinct();
-				focusFiles = focusFiles.Union(dupes).ToList();
+				focusFiles = dupes.ToList();
+				var oldBucketIndices = BucketIndices;
+				var oldBuckets = Buckets;
 				BucketIndices = new Dictionary<string, int>();
 				Buckets = new List<List<FileInfo>>();
 				if (focusFiles.Count > 0)
 				{
 					CompareIntoBuckets(focusFiles, mode, BucketIndices, Buckets, progressCallback);
 				}
+				// find files that no longer have a bucket, and mark them in new array as their name/size matches but hash does not match
+				DifferentByHash = focusFiles.Where(f => oldBucketIndices.ContainsKey(f.FullName) && !BucketIndices.ContainsKey(f.FullName)).ToList();
 			}
 		}
 
@@ -348,6 +353,7 @@ namespace FolderDupesDLL
             }
 			// What? This calc uniquities only for directly specified folders, makes no sense
 			*/
+			callback?.Invoke((float)FolderUniquities.Count / Folders.Count);
 			foreach (var di in Folders)
 			{
 				FolderUniquities[di.FullName] = GetFolderUniquity(di);
