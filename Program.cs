@@ -140,10 +140,9 @@ namespace FolderDupesCLI
 				excludeFolders = excludeFolders.Distinct().ToList();
 
 				if (includeFolders.Count == 0) throw new ArgException("No include (-i) folders specified. Nothing to do!");
-				Console.WriteLine("Include folders:");
-				includeFolders.ForEach(f => Console.WriteLine(f));
+				Console.WriteLine("Folders:");
+				includeFolders.ForEach(f => Console.WriteLine((f==focusFolder ? "> " : "- ") + f));
 				Console.WriteLine("Excluded: " + String.Join(", ", excludeFolders.ToArray()));
-				if (focusFolder != null) Console.WriteLine("Focus: " + focusFolder);
 				Console.WriteLine("Mode: " + compareMode.ToString());
 				if (OnlyDupes) Console.WriteLine("Listing only dupes.");
 
@@ -154,20 +153,20 @@ namespace FolderDupesCLI
 				{
 					switch (t)
 					{
-						case "start": Console.Write("Enumerating " + f + "..."); prevprogress = 0; break;
-						case "end": Console.WriteLine(String.Format("{0,6}", f)); break;
-						case "progress": int progress = 0; int.TryParse(f, out progress); if (progress - prevprogress > 1000) { prevprogress = progress; Console.Write(String.Format("{0,6}\x8\x8\x8\x8\x8\x8", progress)); } break;
+						case "start": Console.Write("Enumerating:       0"); prevprogress = 0; break;
+						case "end": Console.WriteLine(String.Format("\x8\x8\x8\x8\x8\x8\x8{0,7}", f)); break;
+						case "progress": int progress = 0; int.TryParse(f, out progress); if (progress - prevprogress > 1000) { prevprogress = progress; Console.Write(String.Format("\x8\x8\x8\x8\x8\x8\x8{0,7}", progress)); } break;
 						case "dirprogress": if (verbose) Console.WriteLine("\n" + f); break;
 					}
 				}
 				);
-				Console.WriteLine(Dupes.Files.Count + " files in " + Dupes.Folders.Count + " folders found.");
+				Console.WriteLine("Found " + Dupes.Files.Count + " files in " + Dupes.Folders.Count + " folders.");
 
 				//ReadMeta();
 
 				var tnow = DateTime.MinValue;
 				Action<float> percentProgressCallback = (f => {
-					var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 1)
+					var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 0.5)
 					{
 						// write int percent padded, move cursor back
 						Console.Write("\x8\x8\x8\x8\x8\x8" + String.Format("{0,2}%", (int)(f * 100)) + "...");
@@ -192,13 +191,14 @@ namespace FolderDupesCLI
 				else
 				{
 					// show all folders' uniquities, ordered.
+					tnow = DateTime.MinValue; // reset timer
 					Console.Write("Finding uniquity       ");
 					Dupes.CalculateFolderUniquity(percentProgressCallback);
 					Console.WriteLine("\x8\x8\x8\x8\x8\x0008done.   ");
 
 					string[] folders = Dupes.FolderUniquities.Keys.ToArray();
 					folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
-					var ordered = folders.OrderBy(f => Dupes.FolderUniquities[f].duplicity);
+					var ordered = folders.OrderBy(f => Dupes.FolderUniquities[f].duplicity * 100000 + Dupes.FolderUniquities[f].dupes.Length);
 
 					if (verbose)
 					{
@@ -236,7 +236,7 @@ namespace FolderDupesCLI
 						catch (Exception e)
 						{
 							Console.Error.WriteLine("Exceptioned when listing dirs: " + string.Join(",", k));
-							throw e;
+							throw;
 						}
 						return result;
 					}
@@ -286,11 +286,10 @@ namespace FolderDupesCLI
 			var results = new Dictionary<string, string[]>();
 			foreach (var fi in Dupes.Files)
 			{
-				if (fi.FullName.ToUpperInvariant().StartsWith(focusFolder.ToUpperInvariant() + "\\"))
+				if (fi.FullName.StartsWith(focusFolder + "\\", StringComparison.OrdinalIgnoreCase))
 				{
-					var dupes = Dupes.GetDupes(fi)?.FindAll(f => string.Compare(f.FullName, fi.FullName, true) != 0); // remove same-file instances
+					var dupes = Dupes.GetDupes(fi)?.FindAll(f => string.Compare(f.FullName, fi.FullName, StringComparison.OrdinalIgnoreCase) != 0); // remove same-file instances
 					var fn = fi.FullName;
-					if (fn.ToUpperInvariant().StartsWith(focusFolder.ToUpperInvariant())) fn = fn.Substring(focusFolder.Length + 1); // get relative path
 					if (dupes == null) dupes = new List<FileInfo>();
 					results[fn] = dupes.Select(f => f.FullName).ToArray();
 				}
@@ -298,25 +297,40 @@ namespace FolderDupesCLI
 
 			int count_unique = 0;
 			int count_dupes = 0;
+			int count_hash = 0;
 
 			var names = results.Keys.OrderBy(f => f);
-			foreach (var name in names)
+			foreach (var fullname in names)
 			{
-				var dupes = results[name];
+				var dupes = results[fullname];
+				var shortname = fullname;
+				if (shortname.StartsWith(focusFolder, StringComparison.OrdinalIgnoreCase)) shortname = shortname.Substring(focusFolder.Length + 1); // get relative path
+
 				if (OnlyDupes && (dupes == null || dupes.Count() == 0)) continue;
 				if (dupes == null || dupes.Count() == 0)
 				{
-					count_unique++;
-					WriteWrappedLine(name + " - \x1b[32;1munique\x1b[0m");
+					if (Dupes.DifferentByHash.Find(f => f.FullName == fullname) != null)
+					{
+						count_hash++;
+						// unique, but hash differs from other file with same name/size/date
+						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " \x1b[33;1m(different)\x1b[0m != " + String.Join(", ", Dupes.DifferentByHash.FindAll(f => f.FullName != fullname).Select(f => f.FullName)));
+					}
+					else
+					{
+						count_unique++;
+						WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname);
+					}
 				}
 				else
 				{
 					count_dupes++;
-					WriteWrappedLine(name + " - \x1b[31;1m" + dupes.Count() + "\x1b[0m: " + String.Join(", ", dupes));
+					string dupecount = (dupes.Count()+1).ToString(); // show count of all files, including the original
+					if (dupes.Count() > 9) dupecount = "+";
+					WriteWrappedLine("\x1b[31;1m"+dupecount+"\x1b[0m: " + shortname + "  =  " + String.Join(", ", dupes));
 				}
 			}
 
-			Console.WriteLine("Unique: " + (count_unique > 0 ? "\x1b[32;1m" + count_unique.ToString() + "\x1b[0m" : "\x1b[33;1m"+count_unique.ToString()) + "\x1b[0m, Dupes: " + (count_dupes > 0 ? "\x1b[31;1m" + count_dupes.ToString() + "\x1b[0m" : count_dupes.ToString()));
+			Console.WriteLine("Unique: " + (count_unique > 0 ? "\x1b[32;1m" + count_unique.ToString() + "\x1b[0m" : "\x1b[33;1m"+count_unique.ToString()) + "\x1b[0m, Dupes: " + (count_dupes > 0 ? "\x1b[31;1m" + count_dupes.ToString() + "\x1b[0m" : count_dupes.ToString()) + ", Different: " + (count_hash > 0 ? "\x1b[33;1m" + count_hash.ToString() + "\x1b[0m" : count_hash.ToString()));
 		}
 
 		public static void ParseArgs(string[] args)
@@ -335,6 +349,7 @@ namespace FolderDupesCLI
 					Console.WriteLine();
 					Console.WriteLine("Default excludes: " + String.Join(", ", excludeFolders.ToArray()));
 					Console.WriteLine("Use '-x !' to clear default excludes, before adding any new.");
+					Environment.Exit(0);
 				}
 				else if (args[i] == "-i")
 				{
@@ -379,6 +394,9 @@ namespace FolderDupesCLI
 				{
 					verbose = true;
 				}
+
+				includeFolders = includeFolders.Distinct().ToList();
+				excludeFolders = excludeFolders.Distinct().ToList();
 			}
 
 		}
