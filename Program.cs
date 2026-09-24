@@ -141,7 +141,7 @@ namespace FolderDupesCLI
 
 				if (includeFolders.Count == 0) throw new ArgException("No include (-i) folders specified. Nothing to do!");
 				Console.WriteLine("Folders:");
-				includeFolders.ForEach(f => Console.WriteLine((f==focusFolder ? "> " : "- ") + f));
+				includeFolders.ForEach(f => Console.WriteLine((f==focusFolder ? "\x1b[1m>\x1b[0m " : "- ") + f));
 				Console.WriteLine("Excluded: " + String.Join(", ", excludeFolders.ToArray()));
 				Console.WriteLine("Mode: " + compareMode.ToString().Replace("Hash", "Contents"));
 				if (OnlyDupes) Console.WriteLine("Listing only dupes.");
@@ -316,7 +316,11 @@ namespace FolderDupesCLI
 			foreach (var fullname in names)
 			{
 				var dupes = results[fullname];
-				if (OnlyDupes && (dupes == null || dupes.Count() == 0)) continue;
+				
+				var isUnique = dupes == null || dupes.Length == 0;
+				var isDiffContent = Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index);
+				
+				if (OnlyDupes && (isUnique && !isDiffContent)) continue;
 
 
 				var shortname = fullname;
@@ -330,12 +334,12 @@ namespace FolderDupesCLI
 				shortname = shortname.PadRight(maxlen);
 
 
-				if (dupes == null || dupes.Count() == 0)
+				if (isUnique)
 				{
-					if (Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index)) {
-						// unique AND hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
+					if (isDiffContent) {
+						// unique BUT hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
 						count_diff++;
-						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => f.FullName.Replace(focusFolder + "\\", "<HERE>\\")).ToArray()));
+						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => f.FullName.Replace(focusFolder + "\\", "\x1b[1m<HERE>\x1b[0m\\")).ToArray()));
 					}
 					else
 					{
