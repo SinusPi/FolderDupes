@@ -117,7 +117,7 @@ namespace FolderDupesCLI
 		}
 
 		static List<String> includeFolders = new List<string>();
-		static List<String> excludeFolders = new List<string>(new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn" });
+		static List<String> excludeFolders = new List<string>(new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn", @"desktop.ini" });
 		static String focusFolder = null;
 		static Dupes.CompareMode compareMode = Dupes.CompareMode.Name | Dupes.CompareMode.Size;
 		static bool verbose = false;
@@ -143,7 +143,7 @@ namespace FolderDupesCLI
 				Console.WriteLine("Folders:");
 				includeFolders.ForEach(f => Console.WriteLine((f==focusFolder ? "> " : "- ") + f));
 				Console.WriteLine("Excluded: " + String.Join(", ", excludeFolders.ToArray()));
-				Console.WriteLine("Mode: " + compareMode.ToString());
+				Console.WriteLine("Mode: " + compareMode.ToString().Replace("Hash", "Contents"));
 				if (OnlyDupes) Console.WriteLine("Listing only dupes.");
 
 				Dupes.Init(includeFolders.ToArray(), excludeFolders.ToArray());
@@ -165,18 +165,23 @@ namespace FolderDupesCLI
 				//ReadMeta();
 
 				var tnow = DateTime.MinValue;
+				var progbarWidth = 10;
+				string backspaces = new string('\x8', ("99% ").Length+progbarWidth);
+				string spaces = new string(' ', backspaces.Length);
 				Action<float> percentProgressCallback = (f => {
+					if (f<0) { tnow = DateTime.MinValue; return; }
 					var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 0.5)
 					{
 						// write int percent padded, move cursor back
-						Console.Write("\x8\x8\x8\x8\x8\x8" + String.Format("{0,2}%", (int)(f * 100)) + "...");
+						var progbar = new string('#', (int)(f * progbarWidth)) + new string('.', progbarWidth - (int)(f * progbarWidth));
+						Console.Write(backspaces + String.Format("{0,2}% {1:10}", (int)(f * 100), progbar));
 						tnow = now;
 					}
 				});
 
-				Console.Write("Comparing       ");
+				Console.Write("Comparing " + spaces);
 				Dupes.RunComparison(compareMode, focusFolder, percentProgressCallback);
-				Console.WriteLine("\x8\x8\x8\x8\x8\x0008done.   ");
+				Console.WriteLine(backspaces + "done."+spaces);
 
 				if (focusFolder != null)
 				{
@@ -192,9 +197,9 @@ namespace FolderDupesCLI
 				{
 					// show all folders' uniquities, ordered.
 					tnow = DateTime.MinValue; // reset timer
-					Console.Write("Finding uniquity       ");
+					Console.Write("Finding uniquity " + spaces);
 					Dupes.CalculateFolderUniquity(percentProgressCallback);
-					Console.WriteLine("\x8\x8\x8\x8\x8\x0008done.   ");
+					Console.WriteLine(backspaces + "done.   ");
 
 					string[] folders = Dupes.FolderUniquities.Keys.ToArray();
 					folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
@@ -294,26 +299,43 @@ namespace FolderDupesCLI
 					results[fn] = dupes.Select(f => f.FullName).ToArray();
 				}
 			}
+			if (results.Count==0)
+			{
+				Console.WriteLine("No files in folder " + focusFolder + ".");
+				Environment.Exit(0);
+			}
 
 			int count_unique = 0;
 			int count_dupes = 0;
-			int count_hash = 0;
+			int count_diff = 0;
 
 			var names = results.Keys.OrderBy(f => f);
+			const int maxfilename=40;
+			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length-focusFolder.Length-1));
+
 			foreach (var fullname in names)
 			{
 				var dupes = results[fullname];
+				if (OnlyDupes && (dupes == null || dupes.Count() == 0)) continue;
+
+
 				var shortname = fullname;
 				if (shortname.StartsWith(focusFolder, StringComparison.OrdinalIgnoreCase)) shortname = shortname.Substring(focusFolder.Length + 1); // get relative path
 
-				if (OnlyDupes && (dupes == null || dupes.Count() == 0)) continue;
+				if (shortname.Length > maxlen)
+				{
+					int half = (maxlen-3) / 2;
+					shortname = shortname.Substring(0, half) + "..." + shortname.Substring(shortname.Length - half);
+				}
+				shortname = shortname.PadRight(maxlen);
+
+
 				if (dupes == null || dupes.Count() == 0)
 				{
-					if (Dupes.DifferentByHash.Find(f => f.FullName == fullname) != null)
-					{
-						count_hash++;
-						// unique, but hash differs from other file with same name/size/date
-						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " \x1b[33;1m(different)\x1b[0m != " + String.Join(", ", Dupes.DifferentByHash.FindAll(f => f.FullName != fullname).Select(f => f.FullName)));
+					if (Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index)) {
+						// unique AND hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
+						count_diff++;
+						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => f.FullName.Replace(focusFolder + "\\", "<HERE>\\")).ToArray()));
 					}
 					else
 					{
@@ -326,11 +348,11 @@ namespace FolderDupesCLI
 					count_dupes++;
 					string dupecount = (dupes.Count()+1).ToString(); // show count of all files, including the original
 					if (dupes.Count() > 9) dupecount = "+";
-					WriteWrappedLine("\x1b[31;1m"+dupecount+"\x1b[0m: " + shortname + "  =  " + String.Join(", ", dupes));
+					WriteWrappedLine("\x1b[31;1m" + dupecount + "\x1b[0m: " + shortname + " = " + String.Join(", ", dupes.Select(f => f.Replace(focusFolder + "\\", "<HERE>\\"))));
 				}
 			}
 
-			Console.WriteLine("Unique: " + (count_unique > 0 ? "\x1b[32;1m" + count_unique.ToString() + "\x1b[0m" : "\x1b[33;1m"+count_unique.ToString()) + "\x1b[0m, Dupes: " + (count_dupes > 0 ? "\x1b[31;1m" + count_dupes.ToString() + "\x1b[0m" : count_dupes.ToString()) + ", Different: " + (count_hash > 0 ? "\x1b[33;1m" + count_hash.ToString() + "\x1b[0m" : count_hash.ToString()));
+			Console.WriteLine("Unique: " + (count_unique > 0 ? "\x1b[32;1m" + count_unique.ToString() + "\x1b[0m" : "\x1b[33;1m"+count_unique.ToString()) + "\x1b[0m, Dupes: " + (count_dupes > 0 ? "\x1b[31;1m" + count_dupes.ToString() + "\x1b[0m" : count_dupes.ToString()) + ", Different: " + (count_diff > 0 ? "\x1b[33;1m" + count_diff.ToString() + "\x1b[0m" : count_diff.ToString()));
 		}
 
 		public static void ParseArgs(string[] args)
