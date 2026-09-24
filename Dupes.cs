@@ -23,6 +23,8 @@ namespace FolderDupesDLL
 		public static Dictionary<string, int> BucketIndices = new Dictionary<string, int>();
 		public static List<List<FileInfo>> Buckets = new List<List<FileInfo>>();
 		public static List<FileInfo> DifferentByHash = new List<FileInfo>();
+		public static Dictionary<string, int> HashDiffBucketIndices = new Dictionary<string, int>();
+		public static List<List<FileInfo>> HashDiffBuckets = new List<List<FileInfo>>();
 		public static int MaxDepth = 50;
 		public static string[] SearchFolders = new string[0];
 
@@ -220,7 +222,14 @@ namespace FolderDupesDLL
 					CompareIntoBuckets(focusFiles, mode, BucketIndices, Buckets, progressCallback);
 				}
 				// find files that no longer have a bucket, and mark them in new array as their name/size matches but hash does not match
-				DifferentByHash = focusFiles.Where(f => oldBucketIndices.ContainsKey(f.FullName) && !BucketIndices.ContainsKey(f.FullName)).ToList();
+				HashDiffBucketIndices = new Dictionary<string, int>();
+				HashDiffBuckets = new List<List<FileInfo>>();
+				foreach (var f in focusFiles.Where(f => oldBucketIndices.ContainsKey(f.FullName) && !BucketIndices.ContainsKey(f.FullName)))
+				{
+					// add f to HashDiffBuckets
+					HashDiffBuckets.Add(oldBuckets[oldBucketIndices[f.FullName]]);
+					HashDiffBucketIndices[f.FullName] = HashDiffBuckets.Count - 1;
+				}
 			}
 		}
 
