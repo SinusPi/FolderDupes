@@ -154,7 +154,7 @@ namespace FolderDupesCLI
 					switch (t)
 					{
 						case "start": Console.Write("Enumerating:       0"); prevprogress = 0; break;
-						case "end": Console.WriteLine(String.Format("\x8\x8\x8\x8\x8\x8\x8{0,7}", f)); break;
+						case "end": Console.Write("\r                          \r"); break;
 						case "progress": int progress = 0; int.TryParse(f, out progress); if (progress - prevprogress > 1000) { prevprogress = progress; Console.Write(String.Format("\x8\x8\x8\x8\x8\x8\x8{0,7}", progress)); } break;
 						case "dirprogress": if (verbose) Console.WriteLine("\n" + f); break;
 					}
@@ -181,7 +181,7 @@ namespace FolderDupesCLI
 
 				Console.Write("Comparing " + spaces);
 				Dupes.RunComparison(compareMode, focusFolder, percentProgressCallback);
-				Console.WriteLine(backspaces + "done."+spaces);
+				Console.Write("\r                                    \r");
 
 				if (focusFolder != null)
 				{
@@ -309,9 +309,18 @@ namespace FolderDupesCLI
 			int count_dupes = 0;
 			int count_diff = 0;
 
-			var names = results.Keys.OrderBy(f => f);
+			var names = results.Keys.OrderByDescending(f => (f.Replace(focusFolder + "\\", "").Contains("\\") ? 1 : 0)).ThenBy(f => f);
 			const int maxfilename=40;
 			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length-focusFolder.Length-1));
+
+			string FormatDupeFilename(string fullname, string focusname)
+			{
+				var dirname = Path.GetDirectoryName(fullname);
+				var shortname = Path.GetFileName(fullname);
+				if (shortname != focusname) shortname = "\x1b[36m" + shortname + "\x1b[0m"; else shortname = "\x1b[1;30m" + shortname + "\x1b[0m";
+				dirname = dirname.Replace(focusFolder + "\\", "\x1b[1m<HERE>\x1b[0m\\");
+				return dirname + "\x1b[1;30m" + Path.DirectorySeparatorChar + "\x1b[0m" + shortname;
+			}
 
 			foreach (var fullname in names)
 			{
@@ -326,12 +335,13 @@ namespace FolderDupesCLI
 				var shortname = fullname;
 				if (shortname.StartsWith(focusFolder, StringComparison.OrdinalIgnoreCase)) shortname = shortname.Substring(focusFolder.Length + 1); // get relative path
 
-				if (shortname.Length > maxlen)
+				var shortname_display = shortname;
+				if (shortname_display.Length > maxlen)
 				{
 					int half = (maxlen-3) / 2;
-					shortname = shortname.Substring(0, half) + "..." + shortname.Substring(shortname.Length - half);
+					shortname_display = shortname_display.Substring(0, half) + "..." + shortname_display.Substring(shortname_display.Length - half);
 				}
-				shortname = shortname.PadRight(maxlen);
+				shortname_display = shortname_display.PadRight(maxlen);
 
 
 				if (isUnique)
@@ -339,12 +349,12 @@ namespace FolderDupesCLI
 					if (isDiffContent) {
 						// unique BUT hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
 						count_diff++;
-						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => f.FullName.Replace(focusFolder + "\\", "\x1b[1m<HERE>\x1b[0m\\")).ToArray()));
+						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => FormatDupeFilename(f.FullName, shortname)).ToArray()));
 					}
 					else
 					{
 						count_unique++;
-						WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname);
+						WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname_display);
 					}
 				}
 				else
@@ -352,7 +362,7 @@ namespace FolderDupesCLI
 					count_dupes++;
 					string dupecount = (dupes.Count()+1).ToString(); // show count of all files, including the original
 					if (dupes.Count() > 9) dupecount = "+";
-					WriteWrappedLine("\x1b[31;1m" + dupecount + "\x1b[0m: " + shortname + " = " + String.Join(", ", dupes.Select(f => f.Replace(focusFolder + "\\", "<HERE>\\"))));
+					WriteWrappedLine("\x1b[31;1m" + dupecount + "\x1b[0m: " + shortname_display + " = " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
 				}
 			}
 
