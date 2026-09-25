@@ -148,40 +148,15 @@ namespace FolderDupesCLI
 
 				Dupes.Init(includeFolders.ToArray(), excludeFolders.ToArray());
 
-				int prevprogress = 0;
-				Dupes.Enumerate((string t, string f) =>
-				{
-					switch (t)
-					{
-						case "start": Console.Write("Enumerating:       0"); prevprogress = 0; break;
-						case "end": Console.Write("\r                          \r"); break;
-						case "progress": int progress = 0; int.TryParse(f, out progress); if (progress - prevprogress > 1000) { prevprogress = progress; Console.Write(String.Format("\x8\x8\x8\x8\x8\x8\x8{0,7}", progress)); } break;
-						case "dirprogress": if (verbose) Console.WriteLine("\n" + f); break;
-					}
-				}
-				);
+				var enumerationProgress = new Progress(prefix: "Enumerating: ", rawNumeric: true, rawWidth: 5, showDirectoryProgress: verbose);
+				Dupes.Enumerate(enumerationProgress.EnumerateAction);
 				Console.WriteLine("Found " + Dupes.Files.Count + " files in " + Dupes.Folders.Count + " folders.");
 
 				//ReadMeta();
 
-				var tnow = DateTime.MinValue;
-				var progbarWidth = 10;
-				string backspaces = new string('\x8', ("99% ").Length+progbarWidth);
-				string spaces = new string(' ', backspaces.Length);
-				Action<float> percentProgressCallback = (f => {
-					if (f<0) { tnow = DateTime.MinValue; return; }
-					var now = DateTime.Now; if (tnow != null && now.Subtract(tnow).TotalSeconds >= 0.5)
-					{
-						// write int percent padded, move cursor back
-						var progbar = new string('#', (int)(f * progbarWidth)) + new string('.', progbarWidth - (int)(f * progbarWidth));
-						Console.Write(backspaces + String.Format("{0,2}% {1:10}", (int)(f * 100), progbar));
-						tnow = now;
-					}
-				});
-
-				Console.Write("Comparing " + spaces);
-				Dupes.RunComparison(compareMode, focusFolder, percentProgressCallback);
-				Console.Write("\r                                    \r");
+				var comparisonProgress = new Progress(prefix: "Comparing: ", showPercent: true, barWidth: 10);
+				Dupes.RunComparison(compareMode, focusFolder, comparisonProgress.ProgressAction);
+				Console.WriteLine();
 
 				if (focusFolder != null)
 				{
@@ -196,10 +171,9 @@ namespace FolderDupesCLI
 				else
 				{
 					// show all folders' uniquities, ordered.
-					tnow = DateTime.MinValue; // reset timer
-					Console.Write("Finding uniquity " + spaces);
-					Dupes.CalculateFolderUniquity(percentProgressCallback);
-					Console.WriteLine(backspaces + "done.   ");
+					var uniquityProgress = new Progress(prefix: "Finding uniquity: ", showPercent: true, barWidth: 10);
+					Dupes.CalculateFolderUniquity(uniquityProgress.ProgressAction);
+					Console.WriteLine();
 
 					string[] folders = Dupes.FolderUniquities.Keys.ToArray();
 					folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
