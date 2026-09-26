@@ -35,8 +35,7 @@ namespace FolderDupesCLI
 		//static string[] SearchFolders = { @"C:\FOTO\" };
 		//static Regex[] NotPatterns = { new Regex(@"^C:\\FOTO\\LRplugins"), new Regex(@".*lrdata$"), new Regex(@".*lrdata$") };
 		static int MinDupes = 5;
-		private const int WrappedIndent = 10;
-		private static readonly Regex AnsiEscapeRegex = new Regex(@"\x1B\[[0-9;]*m", RegexOptions.Compiled);
+		static WrapWriter wrapWriter = new WrapWriter(10);
 
 		private static void EnableVirtualTerminalProcessing()
 		{
@@ -47,73 +46,6 @@ namespace FolderDupesCLI
 			if (!GetConsoleMode(iStdOut, out outConsoleMode)) return;
 			outConsoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 			SetConsoleMode(iStdOut, outConsoleMode);
-		}
-
-		private static int GetConsoleWidth()
-		{
-			try
-			{
-				return Math.Max(WrappedIndent + 1, Console.WindowWidth);
-			}
-			catch
-			{
-				return 80;
-			}
-		}
-
-		private static int VisibleLength(string text)
-		{
-			return string.IsNullOrEmpty(text) ? 0 : AnsiEscapeRegex.Replace(text, string.Empty).Length;
-		}
-
-		private static void WriteWrappedLine(string text)
-		{
-			if (string.IsNullOrEmpty(text))
-			{
-				Console.WriteLine();
-				return;
-			}
-
-			var width = GetConsoleWidth();
-			if (VisibleLength(text) <= width)
-			{
-				Console.WriteLine(text);
-				return;
-			}
-
-			var indent = new string(' ', WrappedIndent);
-			var line = new StringBuilder();
-			int visible = 0;
-
-			for (int i = 0; i < text.Length;)
-			{
-				if (text[i] == '\x1b' && i + 1 < text.Length && text[i + 1] == '[')
-				{
-					int start = i;
-					i += 2;
-					while (i < text.Length && text[i] != 'm') i++;
-					if (i < text.Length) i++;
-					line.Append(text, start, i - start);
-					continue;
-				}
-
-				if (visible >= width)
-				{
-					Console.WriteLine(line.ToString());
-					line.Clear();
-					line.Append(indent);
-					visible = WrappedIndent;
-				}
-
-				line.Append(text[i]);
-				visible++;
-				i++;
-			}
-
-			if (line.Length > 0)
-			{
-				Console.WriteLine(line.ToString());
-			}
 		}
 
 		static List<String> includeFolders = new List<string>();
@@ -198,18 +130,8 @@ namespace FolderDupesCLI
 
 		public static void RunFocused(string focusFolder, Dupes.CompareMode compareMode, bool OnlyDupes)
 		{
-			var results = new Dictionary<string, string[]>();
-			foreach (var fi in Dupes.Files)
-			{
-				if (fi.FullName.StartsWith(focusFolder + "\\", StringComparison.OrdinalIgnoreCase))
-				{
-					var dupes = Dupes.GetDupes(fi)?.FindAll(f => string.Compare(f.FullName, fi.FullName, StringComparison.OrdinalIgnoreCase) != 0); // remove same-file instances
-					var fn = fi.FullName;
-					if (dupes == null) dupes = new List<FileInfo>();
-					results[fn] = dupes.Select(f => f.FullName).ToArray();
-				}
-			}
-			if (results.Count==0)
+			var focusGroups = Dupes.IterDupesInFolder(focusFolder);
+			if (focusGroups.Count() == 0)
 			{
 				Console.WriteLine("No files in folder " + focusFolder + ".");
 				Environment.Exit(0);
@@ -220,7 +142,7 @@ namespace FolderDupesCLI
 				var dirname = Path.GetDirectoryName(fullname);
 				var shortname = Path.GetFileName(fullname);
 				if (shortname != focusname) shortname = "\x1b[36m" + shortname + "\x1b[0m"; else shortname = "\x1b[1;30m" + shortname + "\x1b[0m";
-				dirname = dirname.Replace(focusFolder + "\\", "\x1b[1m<HERE>\x1b[0m\\");
+				dirname = dirname.Replace(focusFolder, "\x1b[1m<HERE>\x1b[0m");
 				return dirname + "\x1b[1;30m" + Path.DirectorySeparatorChar + "\x1b[0m" + shortname;
 			}
 
@@ -228,11 +150,12 @@ namespace FolderDupesCLI
 			int count_dupes = 0;
 			int count_diff = 0;
 
-			var names = results.Keys.OrderByDescending(f => (f.Replace(focusFolder + "\\", "").Contains("\\") ? 1 : 0)).ThenBy(f => f);
+			var dupesOrdered = focusGroups.OrderByDescending(f => (f[0].Replace(focusFolder + "\\", "").Contains("\\") ? 1 : 0)).ThenBy(f => f[0]);
 			const int maxfilename=40;
-			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length-focusFolder.Length-1));
+			var names = dupesOrdered.Select(f => f[0].Replace(focusFolder + "\\", "")).ToArray();
+			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length));
 
-			foreach (var result in Dupes.IterFileUniquities(names, focusFolder, OnlyDupes, maxlen, results))
+			foreach (var result in Dupes.IterFileUniquities(dupesOrdered, focusFolder, OnlyDupes, maxlen))
 			{
 				var dupes = result.dupePaths;
 				
@@ -251,19 +174,19 @@ namespace FolderDupesCLI
 				if (result.dupeState == Dupes.CompareResult.Unique)
 				{
 					count_unique++;
-					WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname_display);
+					wrapWriter.WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname_display);
 				}
 				else if (result.dupeState == Dupes.CompareResult.Different)
 				{
 					count_diff++;
-					WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
+					wrapWriter.WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
 				}
 				else
 				{
 					count_dupes++;
 					string dupecount = (dupes.Count()+1).ToString(); // show count of all files, including the original
 					if (dupes.Count() > 9) dupecount = "+";
-					WriteWrappedLine("\x1b[31;1m" + dupecount + "\x1b[0m: " + shortname_display + " = " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
+					wrapWriter.WriteWrappedLine("\x1b[31;1m" + dupecount + "\x1b[0m: " + shortname_display + " = " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
 				}
 			}
 
@@ -393,6 +316,7 @@ namespace FolderDupesCLI
 					if (arg.IndexOf("s") >= 0) compareMode |= Dupes.CompareMode.Size;
 					if (arg.IndexOf("c") >= 0) compareMode |= Dupes.CompareMode.Hash; // c for content
 					if (arg.IndexOf("e") >= 0) compareMode |= Dupes.CompareMode.Hush; // e for ends
+					if (arg.IndexOf("x") >= 0) compareMode |= Dupes.CompareMode.ExifDate; // x for EXIF date
 				}
 				else if (args[i] == "--only-dupes")
 				{
@@ -406,7 +330,12 @@ namespace FolderDupesCLI
 				includeFolders = includeFolders.Distinct().ToList();
 				excludeFolders = excludeFolders.Distinct().ToList();
 			}
-
 		}
+
+		/**
+		 * Iterate through all files in the specified focus folder, and yield each file's dupes (including the original file at the front of the list).
+		 * @param focusFolder The folder to focus on.
+		 * @return An enumerable of string arrays, where each array contains the full paths of a file and its dupes.
+		 */
 	}
 }
