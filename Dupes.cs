@@ -6,7 +6,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace FolderDupesDLL
 {
@@ -159,6 +158,14 @@ namespace FolderDupesDLL
 				var fprint = (mode.HasFlag(CompareMode.Name) ? f.Name : "");
 				if (mode.HasFlag(CompareMode.Size)) fprint += "::" + f.Length.ToString();
 				if (mode.HasFlag(CompareMode.Date)) fprint += "::" + f.LastWriteTime.ToFileTime().ToString();
+				if (mode.HasFlag(CompareMode.ExifDate)) {
+					var date = ReadEXIF(f,"DateTimeOriginal");
+					//Console.WriteLine("EXIF date for " + f.FullName + " is " + (date==null ? "null" : date));
+					if (date == null) // skip file
+						continue;
+					else
+						fprint += "::" + date;
+				}
 				if (mode.HasFlag(CompareMode.Hash)) fprint += "::" + CalculateMD5(f.FullName); // computes full MD5 hash of file contents; this is slow for large files, so use sparingly
 				else if (mode.HasFlag(CompareMode.Hush)) fprint += "::" + CalculateCrappyMD5(f.FullName); // computes a "crappy" MD5 hash from the first and last 128 bytes of the file; this is faster but less reliable
 
@@ -199,14 +206,14 @@ namespace FolderDupesDLL
 			BucketIndices = new Dictionary<string, int>();
 			Buckets = new List<List<FileInfo>>();
 
-			var was_hash = mode.HasFlag(CompareMode.Hash);
-			if (focusFolder != null && was_hash) mode &= ~CompareMode.Hash;
-			
-			CompareIntoBuckets(Files, mode, BucketIndices, Buckets, progressCallback);
+			CompareMode content_flags = 0;
+			if (focusFolder!=null) content_flags = (mode & (CompareMode.Hash | CompareMode.ExifDate)); // leave content-based flags for second pass if focusFolder is specified
+			if (content_flags == mode) content_flags = 0; // buuut if the mode is ONLY content-based, then we don't need to do a second pass, so just do it all in one pass
 
-			if (was_hash)
+			CompareIntoBuckets(Files, mode & ~content_flags, BucketIndices, Buckets, progressCallback);
+
+			if (content_flags != 0)
 			{
-				mode |= CompareMode.Hash;
 				// now re-run the comparison for the buckets that have more than one file, but only for files in the focusFolder
 				var focusDir = new DirectoryInfo(focusFolder);
 				var focusFiles = Files.Where(f => f.Directory.FullName.StartsWith(focusDir.FullName)).ToList();
@@ -276,7 +283,8 @@ namespace FolderDupesDLL
 			Date = 0b000010,
 			Size = 0b000100,
 			Hash = 0b001000,
-			Hush = 0b010000
+			Hush = 0b010000,
+			ExifDate = 0b100000
 		}
 		/*
 
@@ -522,13 +530,14 @@ namespace FolderDupesDLL
 		}
 
 
-		public static IEnumerable<FileResult> IterFileUniquities(IEnumerable<string> names, string focusFolder, bool OnlyDupes, int maxlen, Dictionary<string, string[]> results)
+		public static IEnumerable<FileResult> IterFileUniquities(IEnumerable<string[]> filegroups, string focusFolder, bool OnlyDupes, int maxlen)
 		{
-			foreach (var fullname in names)
+			foreach (var filegroup in filegroups)
 			{
-				var dupes = results[fullname];
+				var fullname = filegroup[0];
+				var dupes = filegroup.Skip(1).ToArray();
 
-				var isUnique = dupes == null || dupes.Length == 0;
+				var isUnique = dupes.Length == 0;
 				var isDiffContent = Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index);
 
 				if (OnlyDupes && (isUnique && !isDiffContent)) continue;
@@ -551,7 +560,59 @@ namespace FolderDupesDLL
 					yield return new FileResult { path = fullname, dupeState = CompareResult.Dupe, dupePaths = dupes };
 				}
 			}
-
 		}
+
+		/**
+		 * Filter through all files in known Files, matching the specified folder, optionally including subfolders.
+		 * @param folder The folder to filter through.
+		 * @param includeSubfolders Whether to include subfolders.
+		 * @return An enumerable of FileInfo objects representing the files in the folder.
+		 */
+		public static IEnumerable<FileInfo> IterFilesInFolder(string folder, bool includeSubfolders = true)
+		{
+			foreach (var f in Files)
+			{
+				if (f.FullName.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase))
+				{
+					if (includeSubfolders || f.Directory.FullName.Equals(folder, StringComparison.OrdinalIgnoreCase))
+					{
+						yield return f;
+					}
+				}
+			}
+		}
+
+		public static IEnumerable<string[]> IterDupesInFolder(string focusFolder)
+		{
+			foreach (var fi in IterFilesInFolder(focusFolder))
+			{
+				// get all dupes of this file, with the original file at the front of the list
+				var dupes = (GetDupes(fi) ?? new List<FileInfo>()).Select(f => f.FullName).ToList().FindAll(f => string.Compare(f, fi.FullName, StringComparison.OrdinalIgnoreCase) != 0); // remove same-file instances
+				dupes.Insert(0, fi.FullName); // bring the original file to the front of the list
+				yield return dupes.ToArray();
+			}
+		}
+
+		public static string ReadEXIF (FileInfo fi, string tag)
+		{
+			try
+			{
+				int EXIF_ID;
+				if (tag == "DateTimeOriginal") EXIF_ID = 0x9003;
+				else if (tag == "DateTimeDigitized") EXIF_ID = 0x9004;
+				else if (tag == "DateTime") EXIF_ID = 0x0132;
+				else return null;
+
+				using (var fs = new FileStream(fi.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+				using (var br = new BinaryReader(fs))
+				using (var er = new ExifReader(br))
+				{
+					return er.ReadExifTag(EXIF_ID);
+				}
+			}
+			catch { }
+			return null;
+		}
+
 	}
 }
