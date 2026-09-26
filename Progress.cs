@@ -72,7 +72,7 @@ namespace FolderDupesCLI
 				case "progress":
 					int progress;
 					if (!int.TryParse(value, out progress)) return;
-					HandleProgress(progress / 100f);
+					HandleProgress(progress);
 					break;
 				case "dirprogress":
 					if (showDirectoryProgress)

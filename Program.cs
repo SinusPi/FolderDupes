@@ -150,13 +150,14 @@ namespace FolderDupesCLI
 
 				var enumerationProgress = new Progress(prefix: "Enumerating: ", rawNumeric: true, rawWidth: 5, showDirectoryProgress: verbose);
 				Dupes.Enumerate(enumerationProgress.EnumerateAction);
+
 				Console.WriteLine("Found " + Dupes.Files.Count + " files in " + Dupes.Folders.Count + " folders.");
 
 				//ReadMeta();
 
 				var comparisonProgress = new Progress(prefix: "Comparing: ", showPercent: true, barWidth: 10);
 				Dupes.RunComparison(compareMode, focusFolder, comparisonProgress.ProgressAction);
-				Console.WriteLine();
+				Console.Write("\r                              \r");
 
 				if (focusFolder != null)
 				{
@@ -170,72 +171,7 @@ namespace FolderDupesCLI
 				}
 				else
 				{
-					// show all folders' uniquities, ordered.
-					var uniquityProgress = new Progress(prefix: "Finding uniquity: ", showPercent: true, barWidth: 10);
-					Dupes.CalculateFolderUniquity(uniquityProgress.ProgressAction);
-					Console.WriteLine();
-
-					string[] folders = Dupes.FolderUniquities.Keys.ToArray();
-					folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
-					var ordered = folders.OrderBy(f => Dupes.FolderUniquities[f].duplicity * 100000 + Dupes.FolderUniquities[f].dupes.Length);
-
-					if (verbose)
-					{
-						Console.WriteLine("Uniquity:");
-						foreach (var f in folders) Console.WriteLine(" - " + f + " = " + Dupes.FolderUniquities[f].duplicity);
-					}
-
-					Console.WriteLine("Duplicated folders:");
-
-					List<string> listDirs(Dictionary<string, int> dir, Dupes.folderUniquity me_uniq)
-					{
-						var result = new List<string>();
-						var k = dir.Keys;
-						try
-						{
-							foreach (string dirName in k)
-							{
-								//if (verbose) Console.WriteLine("- listing: "+dirName);
-								if (!Dupes.FolderUniquities.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: " + dirName + " has no uniquity result!");
-								var dupe_uniq = Dupes.FolderUniquities[dirName];
-								//if (verbose) Console.WriteLine("- listing...");
-								if (!dir.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: WTF? " + dirName + " not present in dir");
-								//if (verbose) Console.WriteLine("- contains...");
-								result.Add(String.Format("  {0} : \x1b[33;1m{1}\x1b[0m{2}"/*+dupe_uniq.filesHash*/,
-									dirName,
-									dir[dirName],
-									(me_uniq.filesHash == dupe_uniq.filesHash ? " - \x1b[42;37;1m EQUAL \x1b[0m" :
-									 (dupe_uniq.allFilesRelative.Count() == dir[dirName] ? " - \x1b[44;37;1m ALL \x1b[0m" :
-									 " of " + dupe_uniq.allFilesRelative.Count()))
-									//, String.Join(",", dupe_uniq.allFilesRelative.ToArray())
-									));
-								//if (verbose) Console.WriteLine("- listed.");
-							}
-						}
-						catch (Exception e)
-						{
-							Console.Error.WriteLine("Exceptioned when listing dirs: " + string.Join(",", k));
-							throw;
-						}
-						return result;
-					}
-					var skips = new Dictionary<string, bool>();
-					foreach (var o in ordered)
-					{
-						var fuq = Dupes.FolderUniquities[o];
-						if (fuq.dupes.Length < MinDupes) continue;
-						if (skips.ContainsKey(o)) continue;
-						if (fuq.totallyDuped && Dupes.FolderUniquities.TryGetValue(o.Remove(o.LastIndexOf('\\')), out var fuq2) && fuq2.totallyDuped) continue; // parent is fully duped, too
-						Console.WriteLine(String.Format("{0} - {1}% duped (\x1b[33;1m{2}\x1b[0m dupes, {3} unique):",
-							o,
-							(fuq.duplicity * 100).ToString("0"),
-							fuq.dupes.Count(),
-							(fuq.unique > 0 ? "\x1b[32;1m" : "") + fuq.unique + "\x1b[0m"
-							//, String.Join(",", fuq.allFilesRelative.ToArray())
-							));
-						Console.WriteLine(String.Join("\n", listDirs(fuq.dupeDirs, fuq)));
-						Console.WriteLine("");
-					}
+					RunAllFolders();
 				}
 
 				//Dupes.CompareFolders();
@@ -279,14 +215,6 @@ namespace FolderDupesCLI
 				Environment.Exit(0);
 			}
 
-			int count_unique = 0;
-			int count_dupes = 0;
-			int count_diff = 0;
-
-			var names = results.Keys.OrderByDescending(f => (f.Replace(focusFolder + "\\", "").Contains("\\") ? 1 : 0)).ThenBy(f => f);
-			const int maxfilename=40;
-			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length-focusFolder.Length-1));
-
 			string FormatDupeFilename(string fullname, string focusname)
 			{
 				var dirname = Path.GetDirectoryName(fullname);
@@ -296,17 +224,19 @@ namespace FolderDupesCLI
 				return dirname + "\x1b[1;30m" + Path.DirectorySeparatorChar + "\x1b[0m" + shortname;
 			}
 
-			foreach (var fullname in names)
+			int count_unique = 0;
+			int count_dupes = 0;
+			int count_diff = 0;
+
+			var names = results.Keys.OrderByDescending(f => (f.Replace(focusFolder + "\\", "").Contains("\\") ? 1 : 0)).ThenBy(f => f);
+			const int maxfilename=40;
+			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length-focusFolder.Length-1));
+
+			foreach (var result in Dupes.IterFileUniquities(names, focusFolder, OnlyDupes, maxlen, results))
 			{
-				var dupes = results[fullname];
+				var dupes = result.dupePaths;
 				
-				var isUnique = dupes == null || dupes.Length == 0;
-				var isDiffContent = Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index);
-				
-				if (OnlyDupes && (isUnique && !isDiffContent)) continue;
-
-
-				var shortname = fullname;
+				var shortname = result.path;
 				if (shortname.StartsWith(focusFolder, StringComparison.OrdinalIgnoreCase)) shortname = shortname.Substring(focusFolder.Length + 1); // get relative path
 
 				var shortname_display = shortname;
@@ -318,18 +248,15 @@ namespace FolderDupesCLI
 				shortname_display = shortname_display.PadRight(maxlen);
 
 
-				if (isUnique)
+				if (result.dupeState == Dupes.CompareResult.Unique)
 				{
-					if (isDiffContent) {
-						// unique BUT hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
-						count_diff++;
-						WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", Dupes.HashDiffBuckets[hash_index].Where(f => f.FullName != fullname).Select(f => FormatDupeFilename(f.FullName, shortname)).ToArray()));
-					}
-					else
-					{
-						count_unique++;
-						WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname_display);
-					}
+					count_unique++;
+					WriteWrappedLine("\x1b[32;1mU\x1b[0m: " + shortname_display);
+				}
+				else if (result.dupeState == Dupes.CompareResult.Different)
+				{
+					count_diff++;
+					WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
 				}
 				else
 				{
@@ -341,6 +268,77 @@ namespace FolderDupesCLI
 			}
 
 			Console.WriteLine("Unique: " + (count_unique > 0 ? "\x1b[32;1m" + count_unique.ToString() + "\x1b[0m" : "\x1b[33;1m"+count_unique.ToString()) + "\x1b[0m, Dupes: " + (count_dupes > 0 ? "\x1b[31;1m" + count_dupes.ToString() + "\x1b[0m" : count_dupes.ToString()) + ", Different: " + (count_diff > 0 ? "\x1b[33;1m" + count_diff.ToString() + "\x1b[0m" : count_diff.ToString()));
+		}
+
+		public static void RunAllFolders()
+		{
+			// show all folders' uniquities, ordered.
+			var uniquityProgress = new Progress(prefix: "Finding uniquity: ", showPercent: true, barWidth: 10);
+			Dupes.CalculateFolderUniquity(uniquityProgress.ProgressAction);
+			Console.Write("\r                              \r");
+
+			string[] folders = Dupes.FolderUniquities.Keys.ToArray();
+			folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
+			var ordered = folders.OrderBy(f => Dupes.FolderUniquities[f].duplicity * 100000 + Dupes.FolderUniquities[f].dupes.Length);
+
+			if (verbose)
+			{
+				Console.WriteLine("Uniquity:");
+				foreach (var f in folders) Console.WriteLine(" - " + f + " = " + Dupes.FolderUniquities[f].duplicity);
+			}
+
+			Console.WriteLine("Duplicated folders:");
+
+			List<string> listDirs(Dictionary<string, int> dir, Dupes.folderUniquity me_uniq)
+			{
+				var result = new List<string>();
+				var k = dir.Keys;
+				try
+				{
+					foreach (string dirName in k)
+					{
+						//if (verbose) Console.WriteLine("- listing: "+dirName);
+						if (!Dupes.FolderUniquities.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: " + dirName + " has no uniquity result!");
+						var dupe_uniq = Dupes.FolderUniquities[dirName];
+						//if (verbose) Console.WriteLine("- listing...");
+						if (!dir.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: WTF? " + dirName + " not present in dir");
+						//if (verbose) Console.WriteLine("- contains...");
+						result.Add(String.Format("  {0} : \x1b[33;1m{1}\x1b[0m{2}"/*+dupe_uniq.filesHash*/,
+							dirName,
+							dir[dirName],
+							(me_uniq.filesHash == dupe_uniq.filesHash ? " - \x1b[42;37;1m EQUAL \x1b[0m" :
+							 (dupe_uniq.allFilesRelative.Count() == dir[dirName] ? " - \x1b[44;37;1m ALL \x1b[0m" :
+							 " of " + dupe_uniq.allFilesRelative.Count()))
+							//, String.Join(",", dupe_uniq.allFilesRelative.ToArray())
+							));
+						//if (verbose) Console.WriteLine("- listed.");
+					}
+				}
+				catch (Exception e)
+				{
+					Console.Error.WriteLine("Exceptioned when listing dirs: " + string.Join(",", k));
+					throw;
+				}
+				return result;
+			}
+
+			var skips = new Dictionary<string, bool>();
+			foreach (var o in ordered)
+			{
+				var fuq = Dupes.FolderUniquities[o];
+				if (fuq.dupes.Length < MinDupes) continue;
+				if (skips.ContainsKey(o)) continue;
+				if (fuq.totallyDuped && Dupes.FolderUniquities.TryGetValue(o.Remove(o.LastIndexOf('\\')), out var fuq2) && fuq2.totallyDuped) continue; // parent is fully duped, too
+				Console.WriteLine(String.Format("{0} - {1}% duped (\x1b[33;1m{2}\x1b[0m dupes, {3} unique):",
+					o,
+					(fuq.duplicity * 100).ToString("0"),
+					fuq.dupes.Count(),
+					(fuq.unique > 0 ? "\x1b[32;1m" : "") + fuq.unique + "\x1b[0m"
+					//, String.Join(",", fuq.allFilesRelative.ToArray())
+					));
+				Console.WriteLine(String.Join("\n", listDirs(fuq.dupeDirs, fuq)));
+				Console.WriteLine("");
+			}
 		}
 
 		public static void ParseArgs(string[] args)
