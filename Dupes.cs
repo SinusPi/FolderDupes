@@ -507,5 +507,51 @@ namespace FolderDupesDLL
 			// Return the hexadecimal string.
 			return sBuilder.ToString();
 		}
+
+		public enum CompareResult
+		{
+			Unique,
+			Dupe,
+			Different
+		}
+		public class FileResult
+		{
+			public string path;
+			public CompareResult dupeState;
+			public string[] dupePaths;
+		}
+
+
+		public static IEnumerable<FileResult> IterFileUniquities(IEnumerable<string> names, string focusFolder, bool OnlyDupes, int maxlen, Dictionary<string, string[]> results)
+		{
+			foreach (var fullname in names)
+			{
+				var dupes = results[fullname];
+
+				var isUnique = dupes == null || dupes.Length == 0;
+				var isDiffContent = Dupes.HashDiffBucketIndices.TryGetValue(fullname, out var hash_index);
+
+				if (OnlyDupes && (isUnique && !isDiffContent)) continue;
+
+
+				if (isUnique)
+				{
+					if (isDiffContent)
+					{
+						// unique BUT hash differs from other file with same name/size/date, likely a modified/broken file. Show it as a "different" file.
+						yield return new FileResult { path = fullname, dupeState = CompareResult.Different, dupePaths = HashDiffBuckets[hash_index].Where(f=>String.Compare(f.FullName,fullname, StringComparison.OrdinalIgnoreCase) != 0).Select(f => f.FullName).ToArray() };
+					}
+					else
+					{
+						yield return new FileResult { path = fullname, dupeState = CompareResult.Unique, dupePaths = null };
+					}
+				}
+				else
+				{
+					yield return new FileResult { path = fullname, dupeState = CompareResult.Dupe, dupePaths = dupes };
+				}
+			}
+
+		}
 	}
 }
