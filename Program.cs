@@ -36,6 +36,8 @@ namespace FolderDupesCLI
 		//static Regex[] NotPatterns = { new Regex(@"^C:\\FOTO\\LRplugins"), new Regex(@".*lrdata$"), new Regex(@".*lrdata$") };
 		static int MinDupes = 5;
 		static WrapWriter wrapWriter = new WrapWriter(10);
+		
+		static Dupes dupes;
 
 		private static void EnableVirtualTerminalProcessing()
 		{
@@ -49,7 +51,7 @@ namespace FolderDupesCLI
 		}
 
 		static List<String> includeFolders = new List<string>();
-		static List<String> excludeFolders = new List<string>(new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn", @"desktop.ini" });
+		static List<String> excludePatterns = new List<string>(new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn", @"desktop.ini" });
 		static String focusFolder = null;
 		static Dupes.CompareMode compareMode = Dupes.CompareMode.Name | Dupes.CompareMode.Size;
 		static bool verbose = false;
@@ -69,33 +71,35 @@ namespace FolderDupesCLI
 				ParseArgs(args);
 
 				includeFolders = includeFolders.Distinct().ToList();
-				excludeFolders = excludeFolders.Distinct().ToList();
-
+				excludePatterns = excludePatterns.Distinct().ToList();
 				if (includeFolders.Count == 0) throw new ArgException("No include (-i) folders specified. Nothing to do!");
+
 				Console.WriteLine("Folders:");
 				includeFolders.ForEach(f => Console.WriteLine((f==focusFolder ? "\x1b[1m>\x1b[0m " : "- ") + f));
-				Console.WriteLine("Excluded: " + String.Join(", ", excludeFolders.ToArray()));
+
+				Console.WriteLine("Excluded: " + String.Join(", ", excludePatterns.ToArray()));
 				Console.WriteLine("Mode: " + compareMode.ToString().Replace("Hash", "Contents"));
 				if (OnlyDupes) Console.WriteLine("Listing only dupes.");
 
-				Dupes.Init(includeFolders.ToArray(), excludeFolders.ToArray());
+				// let's go.
+
+				dupes = new Dupes(includeFolders:includeFolders.ToArray(), excludePatterns: excludePatterns.ToArray());
 
 				var enumerationProgress = new Progress(prefix: "Enumerating: ", rawNumeric: true, rawWidth: 5, showDirectoryProgress: verbose);
-				Dupes.Enumerate(enumerationProgress.EnumerateAction);
-
-				Console.WriteLine("Found " + Dupes.Files.Count + " files in " + Dupes.Folders.Count + " folders.");
+				dupes.Enumerate(enumerationProgress.AdvancedAction);
+				Console.WriteLine("Looking at " + dupes.Files.Count + " files in " + dupes.Folders.Count + " folders.");
 
 				//ReadMeta();
 
 				var comparisonProgress = new Progress(prefix: "Comparing: ", showPercent: true, barWidth: 10);
-				Dupes.RunComparison(compareMode, focusFolder, comparisonProgress.ProgressAction);
-				Console.Write("\r                              \r");
+				dupes.RunComparison(compareMode, focusFolder, comparisonProgress.AdvancedAction);
+				Console.WriteLine("There are " + dupes.Buckets.Count + " distinct groups.");
 
 				if (focusFolder != null)
 				{
 					RunFocused(focusFolder, compareMode, OnlyDupes);
 
-					//var uniquity = Dupes.GetFolderUniquity(new DirectoryInfo(focusFolder));
+					//var uniquity = dupes.GetFolderUniquity(new DirectoryInfo(focusFolder));
 					//Console.WriteLine((uniquity.duplicity * 100).ToString("0") + "% duped:\n" + uniquity.dupes.ToString());
 					//foreach (var d in uniquity.dupes) Console.WriteLine(uniquity.allFilesRelative[d] +" = " + uniquity.dupeDirs[d]);
 					//Console.WriteLine("Unique:");
@@ -109,7 +113,7 @@ namespace FolderDupesCLI
 				//Dupes.CompareFolders();
 
 				/*
-				foreach (var bu in Buckets)
+				foreach (var bu in dupes.Buckets)
 				{
 					Console.WriteLine(bu[1].FullName + " - " + bu.Count + " dupes");
 				}
@@ -130,7 +134,7 @@ namespace FolderDupesCLI
 
 		public static void RunFocused(string focusFolder, Dupes.CompareMode compareMode, bool OnlyDupes)
 		{
-			var focusGroups = Dupes.IterDupesInFolder(focusFolder);
+			var focusGroups = dupes.IterDupesInFolder(focusFolder);
 			if (focusGroups.Count() == 0)
 			{
 				Console.WriteLine("No files in folder " + focusFolder + ".");
@@ -155,12 +159,12 @@ namespace FolderDupesCLI
 			var names = dupesOrdered.Select(f => f[0].Replace(focusFolder + "\\", "")).ToArray();
 			var maxlen = Math.Min(maxfilename,names.Max(f => f.Length));
 
-			foreach (var result in Dupes.IterFileUniquities(dupesOrdered, focusFolder, OnlyDupes, maxlen))
+			foreach (var result in dupes.IterFileUniquities(dupesOrdered, focusFolder, OnlyDupes, maxlen))
 			{
 				var dupes = result.dupePaths;
 				
 				var shortname = result.path;
-				if (shortname.StartsWith(focusFolder, StringComparison.OrdinalIgnoreCase)) shortname = shortname.Substring(focusFolder.Length + 1); // get relative path
+				shortname = shortname.Replace(focusFolder + "\\", "");
 
 				var shortname_display = shortname;
 				if (shortname_display.Length > maxlen)
@@ -181,7 +185,7 @@ namespace FolderDupesCLI
 					count_diff++;
 					wrapWriter.WriteWrappedLine("\x1b[33;1mD\x1b[0m: " + shortname_display + " ! " + String.Join(", ", dupes.Select(f => FormatDupeFilename(f, shortname))));
 				}
-				else
+				else // dupe
 				{
 					count_dupes++;
 					string dupecount = (dupes.Count()+1).ToString(); // show count of all files, including the original
@@ -197,40 +201,40 @@ namespace FolderDupesCLI
 		{
 			// show all folders' uniquities, ordered.
 			var uniquityProgress = new Progress(prefix: "Finding uniquity: ", showPercent: true, barWidth: 10);
-			Dupes.CalculateFolderUniquity(uniquityProgress.ProgressAction);
+			dupes.CalculateFolderUniquity(uniquityProgress.SimpleAction);
 			Console.Write("\r                              \r");
 
-			string[] folders = Dupes.FolderUniquities.Keys.ToArray();
-			folders = folders.Where(t => !Dupes.SkipUniquities.Contains(t)).ToArray();
-			var ordered = folders.OrderBy(f => Dupes.FolderUniquities[f].duplicity * 100000 + Dupes.FolderUniquities[f].dupes.Length);
+			string[] folders = dupes.FolderUniquities.Keys.ToArray();
+			folders = folders.Where(t => !dupes.SkipUniquities.Contains(t)).ToArray();
+			var ordered = folders.OrderBy(f => dupes.FolderUniquities[f].duplicity * 100000 + dupes.FolderUniquities[f].dupes.Length);
 
 			if (verbose)
 			{
 				Console.WriteLine("Uniquity:");
-				foreach (var f in folders) Console.WriteLine(" - " + f + " = " + Dupes.FolderUniquities[f].duplicity);
+				foreach (var f in folders) Console.WriteLine(" - " + f + " = " + dupes.FolderUniquities[f].duplicity);
 			}
 
 			Console.WriteLine("Duplicated folders:");
 
-			List<string> listDirs(Dictionary<string, int> dir, Dupes.folderUniquity me_uniq)
+			List<string> listDirs(Dictionary<string, int> dupes_in_dir, Dupes.folderUniquity me_uniq)
 			{
 				var result = new List<string>();
-				var k = dir.Keys;
+				var k = dupes_in_dir.Keys;
 				try
 				{
 					foreach (string dirName in k)
 					{
 						//if (verbose) Console.WriteLine("- listing: "+dirName);
-						if (!Dupes.FolderUniquities.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: " + dirName + " has no uniquity result!");
-						var dupe_uniq = Dupes.FolderUniquities[dirName];
+						if (!dupes.FolderUniquities.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: " + dirName + " has no uniquity result!");
+						var dupe_uniq = dupes.FolderUniquities[dirName];
 						//if (verbose) Console.WriteLine("- listing...");
-						if (!dir.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: WTF? " + dirName + " not present in dir");
+						if (!dupes_in_dir.ContainsKey(dirName)) Console.Error.WriteLine("ERROR: WTF? " + dirName + " not present in dir");
 						//if (verbose) Console.WriteLine("- contains...");
 						result.Add(String.Format("  {0} : \x1b[33;1m{1}\x1b[0m{2}"/*+dupe_uniq.filesHash*/,
 							dirName,
-							dir[dirName],
-							(me_uniq.filesHash == dupe_uniq.filesHash ? " - \x1b[42;37;1m EQUAL \x1b[0m" :
-							 (dupe_uniq.allFilesRelative.Count() == dir[dirName] ? " - \x1b[44;37;1m ALL \x1b[0m" :
+							dupes_in_dir[dirName],
+							(me_uniq.filesHash == dupe_uniq.filesHash ? " - \x1b[42;37;1m EQUAL \x1b[0m" + String.Format(" ({0}/{1})", me_uniq.allFilesRelative.Count, dupe_uniq.allFilesRelative.Count) :
+							 (dupe_uniq.allFilesRelative.Count() == dupes_in_dir[dirName] ? " - \x1b[44;37;1m ALL \x1b[0m" :
 							 " of " + dupe_uniq.allFilesRelative.Count()))
 							//, String.Join(",", dupe_uniq.allFilesRelative.ToArray())
 							));
@@ -248,10 +252,10 @@ namespace FolderDupesCLI
 			var skips = new Dictionary<string, bool>();
 			foreach (var o in ordered)
 			{
-				var fuq = Dupes.FolderUniquities[o];
+				var fuq = dupes.FolderUniquities[o];
 				if (fuq.dupes.Length < MinDupes) continue;
 				if (skips.ContainsKey(o)) continue;
-				if (fuq.totallyDuped && Dupes.FolderUniquities.TryGetValue(o.Remove(o.LastIndexOf('\\')), out var fuq2) && fuq2.totallyDuped) continue; // parent is fully duped, too
+				if (fuq.totallyDuped && dupes.FolderUniquities.TryGetValue(o.Remove(o.LastIndexOf('\\')), out var fuq2) && fuq2.totallyDuped) continue; // parent is fully duped, too
 				Console.WriteLine(String.Format("{0} - {1}% duped (\x1b[33;1m{2}\x1b[0m dupes, {3} unique):",
 					o,
 					(fuq.duplicity * 100).ToString("0"),
@@ -278,7 +282,7 @@ namespace FolderDupesCLI
 					Console.WriteLine("-v - verbose");
 					Console.WriteLine("--only-dupes - skip uniques in -f mode");
 					Console.WriteLine();
-					Console.WriteLine("Default excludes: " + String.Join(", ", excludeFolders.ToArray()));
+					Console.WriteLine("Default excludes: " + String.Join(", ", excludePatterns.ToArray()));
 					Console.WriteLine("Use '-x !' to clear default excludes, before adding any new.");
 					Environment.Exit(0);
 				}
@@ -303,9 +307,9 @@ namespace FolderDupesCLI
 					var arg = args[++i];
 					arg = arg.TrimEnd('\\');
 					if (arg == "!")
-						excludeFolders.Clear(); // remove defaults
+						excludePatterns.Clear(); // remove defaults
 					else
-						excludeFolders.Add(arg);
+						excludePatterns.Add(arg);
 				}
 				else if (args[i] == "-m")
 				{
@@ -328,7 +332,7 @@ namespace FolderDupesCLI
 				}
 
 				includeFolders = includeFolders.Distinct().ToList();
-				excludeFolders = excludeFolders.Distinct().ToList();
+				excludePatterns = excludePatterns.Distinct().ToList();
 			}
 		}
 

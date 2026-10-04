@@ -19,8 +19,8 @@ namespace FolderDupesCLI
 		private int lastVisibleLength;
 		private int lastEnumeratedValue;
 
-		public Action<string, string> EnumerateAction { get; private set; }
-		public Action<float> ProgressAction { get; private set; }
+		public Action<string, string> AdvancedAction { get; private set; }
+		public Action<float> SimpleAction { get; private set; }
 
 		public Progress(int? barWidth = null, bool showPercent = false, bool rawNumeric = false, int rawWidth=5, bool showDirectoryProgress = false, int updateIntervalMs = 500, string prefix = null)
 		{
@@ -32,8 +32,8 @@ namespace FolderDupesCLI
 			this.prefix = prefix ?? string.Empty;
 			this.minUpdateInterval = TimeSpan.FromMilliseconds(updateIntervalMs);
 
-			EnumerateAction = HandleEnumerate;
-			ProgressAction = HandleProgress;
+			AdvancedAction = HandleAdvanced;
+			SimpleAction = HandleSimple;
 		}
 
 		private static int VisibleLength(string text)
@@ -62,17 +62,17 @@ namespace FolderDupesCLI
 			lastVisibleLength = VisibleLength(text);
 		}
 
-		private void HandleEnumerate(string type, string value)
+		private void HandleAdvanced(string type, string value)
 		{
 			switch (type)
 			{
 				case "start":
-					HandleProgress(-1);
+					HandleSimple(-1);
 					break;
 				case "progress":
-					int progress;
-					if (!int.TryParse(value, out progress)) return;
-					HandleProgress(progress);
+					float progress;
+					if (!float.TryParse(value, out progress)) return;
+					HandleSimple(progress);
 					break;
 				case "dirprogress":
 					if (showDirectoryProgress)
@@ -88,7 +88,7 @@ namespace FolderDupesCLI
 			}
 		}
 
-		private void HandleProgress(float value)
+		private void HandleSimple(float value)
 		{
 			if (value < 0f)
 			{
@@ -100,22 +100,25 @@ namespace FolderDupesCLI
 			var now = DateTime.Now;
 			if (lastUpdate != DateTime.MinValue && now.Subtract(lastUpdate) < minUpdateInterval) return;
 
-			var progress = (int)(value * 100);
 			string text = "";
 			if (rawNumeric)
 			{
 				// Display raw numeric value as int with specified widths, space padded
-				text += ((int)value).ToString().PadLeft(rawWidth) + " ";
+				text = ((int)value).ToString().PadLeft(rawWidth);
 			}
-			if (showPercent)
+			else
 			{
-				text += string.Format("{0,3}% ", progress);
-			}
-			if (barWidth.HasValue && barWidth.Value > 0)
-			{
-				var filled = Math.Max(0, Math.Min(barWidth.Value, (int)(value * barWidth.Value)));
-				var bar = new string('#', filled) + new string('.', barWidth.Value - filled);
-				text += string.Format("{0}", bar);
+				if (showPercent)
+				{
+					text += string.Format("{0,2}%", (int)(value * 100));
+				}
+				if (barWidth.HasValue && barWidth.Value > 0)
+				{
+					if (showPercent) text += " ";
+					var filled = Math.Max(0, Math.Min(barWidth.Value, (int)(value * barWidth.Value)));
+					var bar = new string('#', filled) + new string('.', barWidth.Value - filled);
+					text += string.Format("{0}", bar);
+				}
 			}
 
 			WriteProgressText(prefix + text);
