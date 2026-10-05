@@ -51,7 +51,7 @@ namespace FolderDupesCLI
 		}
 
 		static List<String> includeFolders = new List<string>();
-		static List<String> excludePatterns = new List<string>(new string[] { @"\\LRplugins", @"\.lrdata$", @"\\node_modules", @"\\\.git", @"\.scriv", @"\.picasa\.ini", @"Thumbs\.db", @"\.svn", @"desktop.ini" });
+		static List<String> excludePatterns = new List<string>(new string[] { @"\\node_modules", @"\\\.git", @"\\\.svn", @"\.picasa\.ini", @"Thumbs\.db", @"desktop\.ini" });
 		static String focusFolder = null;
 		static Dupes.CompareMode compareMode = Dupes.CompareMode.Name | Dupes.CompareMode.Size;
 		static bool verbose = false;
